@@ -5723,170 +5723,13 @@ end
  
  
  
- 
- 
-local function make_quest_visibility_guard(field, call, edit_root_for)
-    local guard = {}
-    local interval, max_checks, max_nodes, max_materials = 0.1, 600, 32, 128
-     
-    local get_option
-    if debug and type(debug.getupvalue) == "function" then
-        for index = 1, 16 do
-            local ok, name, value = pcall(debug.getupvalue, API.fix_bone, index)
-            if not ok or not name then break end
-            if name == "get_config_data" and type(value) == "function" then get_option = value; break end
-        end
-    end
-
-    function guard.stop(state, reason)
-        if state.visibility_pending and state.visibility then state.visibility.status = reason end
-        state.visibility_pending = nil
-        state.visibility_protected = nil
-        state.visibility_options = nil
-    end
-
-    function guard.arm(state, face, data, root, owner)
-        if not get_option then
-            state.visibility = { status = "original visibility options unavailable; no extra writes", checks = 0, writes = 0 }
-            return
-        end
-        local hide_face, hide_hair = get_option(data, "HideFace") == true, get_option(data, "HideHair") == true
-        if get_option(data, "Enable") ~= true or (not hide_face and not hide_hair) then return end
-        local address = quest_object_address(face)
-        if not address or address == quest_object_address(owner) then return end
-        local protected = {}
-        for _, hash in ipairs({ 3471977595, 2156620752, 639293466, 1274174449, 1437951306 }) do
-            local part = call(root, "getPartsObject", hash)
-            local part_address = quest_object_address(part)
-            if part_address then protected[part_address] = true end
-        end
-        if protected[address] then return end
-        state.visibility_face = address
-        state.visibility_protected = protected
-        state.visibility_hide_face, state.visibility_hide_hair = hide_face, hide_hair
-        state.visibility_options = { Enable = data.Enable, HideFace = data.HideFace, HideHair = data.HideHair }
-        state.visibility_deadline = os.clock() + 60
-        state.visibility_next = nil
-        state.visibility_pending = true
-        state.visibility = { status = "waiting for native visibility readback", checks = 0,
-            writes = 0, repairs = 0, face_address = address, child_meshes = 0, zero_material_meshes = 0 }
-    end
-
-     
-    function guard.update(action, state)
-        if not state.visibility_pending then return end
-        if not config.enabled or scene_transition.active or state.generation ~= scene_generation then
-            return guard.stop(state, "visibility cancelled by lifecycle")
-        end
-        local now, info = os.clock(), state.visibility
-        if now > state.visibility_deadline or info.checks >= max_checks then
-            return guard.stop(state, "visibility check budget ended")
-        end
-        if state.visibility_next and now < state.visibility_next then return end
-        state.visibility_next = now + interval
-        local options = state.visibility_options
-        if get_option(options, "Enable") ~= true
-            or (get_option(options, "HideFace") == true) ~= state.visibility_hide_face
-            or (get_option(options, "HideHair") == true) ~= state.visibility_hide_hair then
-            return guard.stop(state, "original visibility options changed")
-        end
-        local phase, mot_phase = tonumber(field(action, "_Phase")), tonumber(field(action, "_MotPhase"))
-        if (phase ~= 1 and phase ~= 2 and phase ~= 3) or (mot_phase ~= 1 and mot_phase ~= 2) then
-            return guard.stop(state, "visibility native phase ended")
-        end
-        local motion = field(action, "_NpcMotionComponent")
-        local owner = motion and get_game_object_quiet(motion)
-        local creator, player = field(action, "_NpcVisualCreator"), field(action, "_Chara")
-        if quest_object_address(owner) ~= state.owner_address or quest_object_address(motion) ~= state.motion_address
-            or not same_runtime_object(owner, get_game_object_quiet(creator))
-            or get_component(owner, "app.HunterCharacter")
-            or (player and same_runtime_object(owner, get_game_object_quiet(player))) then
-            return guard.stop(state, "visibility owner changed")
-        end
-        local root = edit_root_for(owner)
-        local face = root and call(root, "getPartsObject", 935285574)
-        if quest_object_address(face) ~= state.visibility_face then
-            return guard.stop(state, "visibility Face slot changed")
-        end
-        info.checks, info.last_check = info.checks + 1, now
-        local nodes, materials, child_meshes, zero_meshes, writes, unreadable = 0, 0, 0, 0, 0, 0
-        local visited = {}
-
-        local function hide_mesh(part, is_face)
-            local mesh = get_component(part, "via.render.Mesh")
-            if not mesh then return end
-            if not is_face then child_meshes = child_meshes + 1 end
-            local count = tonumber(call(mesh, "get_MaterialNum"))
-            if not count or count < 0 or count > max_materials or count % 1 ~= 0 then
-                error("invalid native visibility material count")
-            end
-            materials = materials + count
-            if materials > max_materials then error("native visibility total material budget exceeded") end
-            if count == 0 then zero_meshes = zero_meshes + 1 end
-            for index = 0, count - 1 do
-                local enabled = call(mesh, "getMaterialsEnable", index)
-                if enabled == true then
-                    local ok, message = call_any(mesh, "setMaterialsEnable", index, false)
-                    if not ok then error(tostring(message)) end
-                    if call(mesh, "getMaterialsEnable", index) ~= false then
-                        error("native visibility write did not read back hidden")
-                    end
-                    writes = writes + 1
-                elseif enabled ~= false then
-                    unreadable = unreadable + 1
-                end
-            end
-        end
-
-        local function walk(part, is_face, depth)
-            nodes = nodes + 1
-            if nodes > max_nodes or depth > 8 then error("native visibility hierarchy budget exceeded") end
-            local address = quest_object_address(part)
-            if not address or visited[address] then error("invalid native visibility child identity") end
-            visited[address] = true
-             
-            if address == state.owner_address or state.visibility_protected[address] then return end
-            local name = get_game_object_name_quiet(part)
-            if not is_face and type(name) == "string" and name:match("^ch0[23]_%d") then return end
-            if not is_face or state.visibility_hide_face then hide_mesh(part, is_face) end
-            if not state.visibility_hide_hair then return end
-            local transform = get_transform(part)
-            local child = transform and call(transform, "get_Child")
-            local siblings = 0
-            while child do
-                siblings = siblings + 1
-                if siblings > max_nodes then error("native visibility sibling budget exceeded") end
-                local object = get_game_object_quiet(child)
-                if not object then error("native visibility child unavailable") end
-                walk(object, false, depth + 1)
-                child = call(child, "get_Next")
-            end
-        end
-
-        walk(face, true, 0)
-        info.nodes, info.child_meshes, info.zero_material_meshes = nodes, child_meshes, zero_meshes
-        info.materials = materials
-        info.unreadable_materials = unreadable
-        info.writes = info.writes + writes
-        if writes > 0 then
-            info.repairs, info.last_repair = info.repairs + 1, now
-        end
-        info.status = unreadable > 0 and "waiting for native material visibility readback"
-            or zero_meshes > 0 and "waiting for native child materials"
-            or "native visibility checked; watching active result"
-    end
-
-    return guard
-end
-
 local function install_quest_result_hooks()
     local states, state_order = {}, {}
     local paused = false
     local report_key = "quest_result"
     local quest = { calls = 0, attempts = 0, succeeded = 0, errors = 0, face_attempts = 0, hide_attempts = 0,
         recent_results = {},
-        face_traces = {}, trace_samples = 0, trace_errors = 0, face_relays = {}, relay_errors = 0,
-        visibility_errors = 0 }
+        face_traces = {}, trace_samples = 0, trace_errors = 0, face_relays = {}, relay_errors = 0 }
     performance[report_key] = quest
 
     local function field(object, name)
@@ -5961,7 +5804,6 @@ local function install_quest_result_hooks()
     end
 
     local face_relay = make_quest_face_relay(field, call, edit_root_for, quest)
-    local visibility_guard = make_quest_visibility_guard(field, call, edit_root_for)
 
      
      
@@ -6169,7 +6011,6 @@ local function install_quest_result_hooks()
         summary.hide_attempts, summary.hide_status = state.hide_attempts or 0, state.hide_status
         summary.phase, summary.mot_phase = state.face_phase, state.face_mot_phase
         summary.native_update_result = state.native_update_result
-        summary.visibility = state.visibility
         summary.variant_ok = state.variant and state.variant.ok
         local item = {
             time = os.clock(), mode = report_key, status = status,
@@ -6184,7 +6025,6 @@ local function install_quest_result_hooks()
             face_bind_driver = state.face_bind_driver,
             face_bind_driver_address = state.face_bind_driver_address,
             hide_attempts = state.hide_attempts, hide_status = state.hide_status,
-            visibility = state.visibility,
             face_trace_started = state.face_trace and state.face_trace.started
         }
         quest.last_result = item
@@ -6202,7 +6042,6 @@ local function install_quest_result_hooks()
                 if states[oldest] then
                     stop_face_trace(states[oldest], "state budget evicted")
                     face_relay.stop(states[oldest], "state budget evicted")
-                    visibility_guard.stop(states[oldest], "state budget evicted")
                     states[oldest].face_data = nil
                     states[oldest].face_status = "state budget evicted"
                     remember(states[oldest], "state budget evicted")
@@ -6323,7 +6162,6 @@ local function install_quest_result_hooks()
         if state and state.generation ~= scene_generation then
             stop_face_trace(state, "scene generation changed")
             face_relay.stop(state, "scene generation changed")
-            visibility_guard.stop(state, "scene generation changed")
             state.face_data = nil
             state.face_status = "scene generation changed; face wait cancelled"
             remember(state, state.status)
@@ -6339,7 +6177,7 @@ local function install_quest_result_hooks()
                 state.settled = snapshot(action, field(action, "_NpcMotionComponent"))
                 remember(state, "settled readback; " .. state.status)
             end
-            if state.face_data or state.trace_pending or state.relay_enabled or state.visibility_pending then return state end
+            if state.face_data or state.trace_pending or state.relay_enabled then return state end
             return
         end
         state = state or new_state(key)
@@ -6496,7 +6334,6 @@ local function install_quest_result_hooks()
         if ok and face_data.Enable ~= false and face_data.BindFace == true and face_relay.available then
             face_relay.arm(state, face, bind_part, bind_hash)
         end
-        if ok then visibility_guard.arm(state, face, face_data, edit_root, owner) end
         if state.diagnostics then state.face_after = snapshot(action, motion) end
         if not ok then stop_face_trace(state, "face API failed") end
         if state.diagnostics then state.sample_settled_at = os.clock() + 0.25 end
@@ -6514,7 +6351,6 @@ local function install_quest_result_hooks()
         state.finished = true
         state.face_data = nil
         face_relay.stop(state, "result callback failed")
-        visibility_guard.stop(state, "result callback failed")
         stop_face_trace(state, "result callback failed")
         state.sample_next, state.sample_settled_at = nil, nil
         remember(state, "caught error: " .. tostring(message))
@@ -6555,7 +6391,6 @@ local function install_quest_result_hooks()
                         for _, state in pairs(states) do
                             stop_face_trace(state, "result suspended")
                             face_relay.stop(state, "result suspended")
-                            visibility_guard.stop(state, "result suspended")
                             if state.face_data then
                                 face_status(state, "result suspended; face wait cancelled", true)
                             end
@@ -6585,7 +6420,6 @@ local function install_quest_result_hooks()
                         state.face_data = nil
                         state.sample_next, state.sample_settled_at = nil, nil
                         face_relay.stop(state, "native update ended")
-                        visibility_guard.stop(state, "native update ended")
                         stop_face_trace(state, "native update ended")
                         remember(state, "native update returned END; " .. tostring(state.status))
                         return retval
@@ -6594,13 +6428,6 @@ local function install_quest_result_hooks()
                         local ok, message = pcall(finish_face, action, state)
                         if not ok then record_error(action, message) end
                         if ok then
-                             
-                            local visible, visibility_error = pcall(visibility_guard.update, action, state)
-                            if not visible then
-                                quest.visibility_errors = quest.visibility_errors + 1
-                                if state.visibility then state.visibility.error = tostring(visibility_error) end
-                                visibility_guard.stop(state, "visibility read/write failed; stopped for this action")
-                            end
                             face_relay.queue(state)
                             local sampled, sample_error = pcall(sample_face_trace, action, state, "after_native_update")
                             if not sampled then
@@ -6612,7 +6439,6 @@ local function install_quest_result_hooks()
                     else
                         face_status(state, "result suspended in original callback", true)
                         face_relay.stop(state, "result suspended in original callback")
-                        visibility_guard.stop(state, "result suspended in original callback")
                         stop_face_trace(state, "result suspended in original callback")
                     end
                 end
@@ -6628,7 +6454,6 @@ local function install_quest_result_hooks()
                     if state.face_data then state.face_status = "action exited before face completion" end
                     state.face_data = nil
                     face_relay.stop(state, "action exited")
-                    visibility_guard.stop(state, "action exited")
                     stop_face_trace(state, "action exited")
                     remember(state, "action exited; " .. tostring(state.status))
                     states[key] = nil
