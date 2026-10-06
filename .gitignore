@@ -1,0 +1,15 @@
+out/
+dist/
+artifacts/
+__pycache__/
+*.pyc
+*.obj
+*.o
+*.pdb
+*.lib
+*.exp
+*.luac
+*.log
+.vs/
+reframework/plugins/*.dll
+reframework/data/
