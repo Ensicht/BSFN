@@ -1,7 +1,7 @@
- 
- 
- 
- 
+-- =============================================================================
+-- 艺术馆完成模型入口
+-- =============================================================================
+-- 仅在原生模型装配完成回调处理，使用独立上下文；不建立普通场景轮询会话。
 
 local function probe_field_quiet(obj, field_name)
     if not obj or type(field_name) ~= "string" then
@@ -67,7 +67,7 @@ local function resolve_event_game_object(value)
     return nil, "unresolved"
 end
 
- 
+-- 使用装配器最终 _PlEquip，而不是可能尚未装配或已经被替换的普通角色装备引用。
 local function build_event_model_context(setupper)
     local context = {
         owner = get_game_object_quiet(setupper),
@@ -187,7 +187,7 @@ local function remember_event_model_setup(item)
     end
 end
 
- 
+-- 单次已完成事件使用独立缓存，不能登记进普通 registered 或污染普通未命中缓存。
 local function process_event_model_setupper(setupper)
     local context = build_event_model_context(setupper)
     local diagnostic = {
@@ -279,7 +279,7 @@ local function event_setup_completed(retval)
     return complete == true, tostring(raw or "")
 end
 
- 
+-- pre/post 通过线程本地 Hook Storage 配对，过渡期两端均提前退出。
 local function install_event_model_npc_hook()
     if not thread or type(thread.get_hook_storage) ~= "function" then
         hook_state.event_model_npc = "thread.get_hook_storage unavailable"

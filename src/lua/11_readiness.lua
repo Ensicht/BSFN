@@ -1,7 +1,7 @@
- 
- 
- 
- 
+-- =============================================================================
+-- 骨骼候选与就绪验证
+-- =============================================================================
+-- 只对未就绪候选重试；构建完成后在同帧应用，并在写入前重新核对身份。
 
 local function get_component(game_obj, type_name)
     local rt = get_runtime_type(type_name)
@@ -130,7 +130,7 @@ local function resource_path_from_bone_data(bone_data)
     if type(fbx_path) ~= "string" or fbx_path == "" then
         return nil
     end
-     
+    -- 与 BoneSystem 的资源创建规则一致，名称中的后缀也属于原始文件名。
     return string.format("BoneSystem/%s.fbxskel", fbx_path)
 end
 
@@ -190,7 +190,7 @@ local function begin_entry_readiness(entry, resolution)
     return true
 end
 
- 
+-- 构造完成标志、资源路径与对象身份共同组成证据，不把非 nil 包装对象当作已就绪。
 local function probe_candidate_bone_state(game_obj, label)
     if not game_obj then
         return nil, "nil candidate"
@@ -271,7 +271,7 @@ local function find_current_ready_bone_state(entry)
     return nil, first_reason
 end
 
- 
+-- 仅等待中的 NPC 使用 0.1 秒重试；代际变化或长时间未被原生更新时不得继续写入。
 local function update_entry_readiness(entry, now)
     if entry.scene_generation ~= scene_generation then
         clear_entry_readiness(entry, "scene generation changed", true)

@@ -1,9 +1,9 @@
- 
- 
- 
- 
+-- =============================================================================
+-- 一次目标处理
+-- =============================================================================
+-- 统一执行身份检查、骨骼和差分应用；普通场景与艺术馆各自提供模型上下文。
 
- 
+-- 真正应用前再次验证身份与就绪签名；一次骨骼成功后才尝试同步差分。
 local function inspect_character(character, source, resolution, cache_entry, options)
     if not config.enabled or not character then
         return false, "disabled or nil character"

@@ -1,7 +1,7 @@
- 
- 
- 
- 
+-- =============================================================================
+-- 静态预设合并与差分应用
+-- =============================================================================
+-- 读取已保存默认预设和分组；全局隐藏优先，不执行玩家变身条件。
 
 local function merge_armor_variant_part_data(target_preset, source_preset)
     if type(source_preset) ~= "table" then
@@ -52,7 +52,7 @@ local function merge_armor_variant_global_hidden(target_preset, source_preset)
     end
 end
 
- 
+-- 基础默认预设 -> 普通分组 -> 全局隐藏；全局组只贡献 false，不意外重新显示部件。
 local function build_static_armor_variant_preset(avm_data)
     local preset = {}
     local used = { source = "static", default_preset = "", group_presets = {} }
@@ -92,7 +92,7 @@ local function build_static_armor_variant_preset(avm_data)
     return preset, used
 end
 
- 
+-- 使用已保存数据同步材质显隐，不读取 NPC 血量，也不运行差分管理器变身条件。
 local function apply_builtin_armor_variant(character, target, body_id, avm_data, avm_source, options)
     local operation = {
         time = os.clock(),
@@ -257,8 +257,8 @@ local function apply_builtin_armor_variant(character, target, body_id, avm_data,
     remember_operation(operation)
     return false, operation.status
 end
- 
- 
+-- 空配置名直接查 body_id；static 保留包内状态；明确文件名则只读取该配置。
+-- 名称沿用旧接口，默认实际走内置静态同步；外部 API 分支仅保留给已有高级配置。
 local function apply_armor_variant_with_api(character, target, body_id, options)
     local operation = {
         time = os.clock(),

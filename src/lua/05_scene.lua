@@ -1,7 +1,7 @@
- 
- 
- 
- 
+-- =============================================================================
+-- 场景代际与过渡隔离
+-- =============================================================================
+-- 加载前回调只设置状态；引用隔离、释放和诊断延后到原有 UpdateMotion。
 
 local function scene_object_key(obj)
     if not obj then
@@ -16,7 +16,7 @@ local function scene_object_key(obj)
     return tostring(obj)
 end
 
- 
+-- 先移出可执行集合，再隔离引用；加载回调中不能集中销毁旧托管包装对象。
 scene_transition.detach_cache = function(reason)
     local registered_count = 0
     for _ in pairs(registered) do
@@ -60,8 +60,8 @@ scene_transition.mark_start = function(reason, requires_fade_in)
     if scene_transition.active then
         return false
     end
-     
-     
+    -- Keep this game-owned load-before callback allocation-free and free of managed-wrapper
+    -- destruction. Cache detachment and all diagnostics run later from UpdateMotion.
     scene_transition.previous_key = scene_context_key
     scene_generation = scene_generation + 1
     scene_context_initialized = false
@@ -83,7 +83,7 @@ scene_transition.mark_start = function(reason, requires_fade_in)
     return true
 end
 
- 
+-- 黑屏旅行必须等对应淡入结束，普通 load-end 不能提前解除该门禁。
 scene_transition.mark_end = function(reason, is_fade_in)
     if scene_transition.active then
         if scene_transition.requires_fade_in and is_fade_in ~= true then
@@ -201,7 +201,7 @@ scene_transition.release = function(current_key)
     )
 end
 
- 
+-- 只在过渡期读取 Loading；原生结束证据和有效场景身份满足后，同帧恢复普通处理。
 scene_transition.update = function()
     if not scene_transition.active then
         return false
@@ -264,7 +264,7 @@ scene_transition.update = function()
     return false
 end
 
- 
+-- 生命周期 Hook 不可用时才采用一秒一次的场景身份回退，不与 Hook 路径叠加。
 local function update_scene_generation_fallback()
     if config.scene_generation_enabled == false then
         return

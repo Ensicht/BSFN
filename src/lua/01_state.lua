@@ -1,7 +1,7 @@
- 
- 
- 
- 
+-- =============================================================================
+-- 配置常量与运行时状态
+-- =============================================================================
+-- 保持稳定版默认值；运行时缓存不写入套装配置，索引由脚本自行维护。
 
 local MOD_NAME = "BoneSystemForNPC"
 local VERSION = "1.7.5"
@@ -31,7 +31,7 @@ local default_config = {
     write_report = false,
     report_interval = 1.0,
     inspect_interval = 1.0,
-    apply_delay = 2.0,  
+    apply_delay = 2.0, -- legacy compatibility; real readiness replaces the fixed delay
     readiness_stable_frames = 1,
     readiness_recent_seen_window = 0.5,
     readiness_retry_interval = 0.1,

@@ -1,7 +1,7 @@
- 
- 
- 
- 
+-- =============================================================================
+-- 配置加载与双字典
+-- =============================================================================
+-- 扫描只在启动或重读时发生；成功覆盖索引，失败保留并回退上次快照。
 
 local function normalize_target_path(path)
     local text = tostring(path or "")
@@ -151,7 +151,7 @@ local function load_main_config()
     local data, loaded_path_or_error = load_json_file(CONFIG_PATH)
     local next_config = type(data) == "table" and data or {}
     merge_defaults(next_config, default_config)
-     
+    -- 两条接管路径固定启用；忽略旧开关，避免升级后沿用 false 而无处重新开启。
     next_config.manual_targets_enabled = nil
     next_config.auto_discover_bonesystem_outfits = nil
     if type(data) == "table" then
@@ -162,7 +162,7 @@ local function load_main_config()
     return next_config
 end
 
- 
+-- 索引是本机扫描快照，不是 NPC 包的配置；写入失败不能伪装成扫描失败。
 local function replace_index_snapshot(path, payload)
     if not json or type(json.dump_file) ~= "function" then
         return false, "json.dump_file unavailable"
@@ -202,7 +202,7 @@ local function load_bone_system_index_snapshot()
     return result, #result > 0, loaded_path_or_error
 end
 
- 
+-- REFramework 的 fs.glob 使用正则路径，不是 shell 的通配符；两种分隔符均需兼容。
 local function scan_bone_system_configs()
     local scan = {
         patterns = {},
@@ -271,7 +271,7 @@ local function scan_bone_system_configs()
     return scan
 end
 
- 
+-- 保持稳定版语义：有效非空扫描才更新；扫描为空或报错时回退旧索引。
 local function rebuild_auto_dictionary()
     auto_by_body_id = {}
     local old_ids, old_loaded = load_bone_system_index_snapshot()
@@ -447,7 +447,7 @@ local function sorted_manual_targets(dictionary)
     return targets, files
 end
 
- 
+-- 保留旧专属包的优先规则，但不以这些规则限制自动接管的 NPC 类别。
 local function rebuild_manual_dictionary()
     manual_by_npc_id = {}
     local scan = scan_target_paths()
@@ -492,7 +492,7 @@ local function rebuild_manual_dictionary()
     diagnostic_status("ManualDict", "status=" .. dictionary_status .. " count=" .. tostring(#manual_targets) .. " source=" .. diagnostics.manual_dictionary_source .. " generation=" .. tostring(dictionary_generation))
 end
 
- 
+-- 一次重读对应一个字典代际，旧目标缓存会在原更新路径中自然失效。
 local function load_config()
     config = load_main_config()
     dictionary_generation = dictionary_generation + 1

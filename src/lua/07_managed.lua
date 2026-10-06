@@ -1,7 +1,7 @@
- 
- 
- 
- 
+-- =============================================================================
+-- 托管调用与场景事件接入
+-- =============================================================================
+-- 不把 pcall 当作原生对象生命周期保证；调用前的场景和身份门禁由各入口负责。
 
 local function safe_call(obj, method_name, ...)
     if not obj or type(method_name) ~= "string" then
@@ -72,7 +72,7 @@ local function safe_sdk_type(type_name)
     return nil
 end
 
- 
+-- 保留已实测的加载、黑屏与淡入信号；不要用所有画面变黑事件替代场景生命周期。
 local function install_scene_transition_hook()
     local td = safe_sdk_type("app.EnvironmentManager")
     if not td then

@@ -1,7 +1,7 @@
- 
- 
- 
- 
+-- =============================================================================
+-- 已命中 NPC 的原生体型分类：只在普通路径换骨前读取，缓存标量结果
+-- =============================================================================
+-- 种族和骨架类型必须同时匹配；名字、性别、身高和资源文件名都不是种族标签。
 local nonhuman_family = (function()
     local helper = {}
     local enum_values
@@ -22,7 +22,7 @@ local nonhuman_family = (function()
         return nil
     end
 
-     
+    -- 使用当前游戏枚举的常量值，不混用普通枚举与 FixedID，也不猜测数值。
     local function constants()
         if enum_values ~= nil then return enum_values end
         local ok, values = pcall(function()
@@ -49,7 +49,7 @@ local nonhuman_family = (function()
         return nil
     end
 
-     
+    -- 原链与标签交叉检查；目标链仍由原有延后任务在引擎提交后独立验证。
     local function source_legs(transform, profile)
         local chain = profile == "RYUJIN_NML" and { "Thigh", "Knee", "Shin", "Foot", "Toe" }
             or { "Thigh", "Shin", "Foot", "Toe" }
@@ -69,7 +69,7 @@ local nonhuman_family = (function()
         return true
     end
 
-     
+    -- 仅补原骨架缺失的小指，不覆盖已有小指动画；两侧无名指必须完整。
     local function source_fingers(transform)
         for _, side in ipairs({ "L", "R" }) do
             local previous = side .. "_Palm"
@@ -86,7 +86,7 @@ local nonhuman_family = (function()
     end
 
     function helper.classify(candidate, state, entry)
-         
+        -- 子部件不能抢先缓存主角色的分类；只采样当前注册 NPC 根节点。
         if not same_runtime_object(read(entry.character, "get_GameObject"), candidate.obj) then
             return { profile = "unsupported", leg_ok = false, fingers_ok = false, reason = "not the NPC root" }
         end
@@ -97,8 +97,8 @@ local nonhuman_family = (function()
         local cached = entry.nonhuman_family
         if cached and cached.root == root_id and cached.motion == motion_id and cached.skeleton == skeleton_id
             and cached.generation == scene_generation then return cached end
-         
-         
+        -- 准备失败后原生对象可能更换；不可让旧龙人标签授权一个新的角色实例。
+        -- 不把资源路径作为失效条件：同实例换骨成功后路径本来就应改变。
         local result = { profile = "unsupported", leg_ok = false, fingers_ok = false, reason = "native tags unavailable",
             root = root_id, motion = motion_id, skeleton = skeleton_id, generation = scene_generation }
         entry.nonhuman_family = result
@@ -128,7 +128,7 @@ local nonhuman_family = (function()
             end
         end
         if not result.leg_ok and not result.fingers_ok then metrics.skipped = metrics.skipped + 1 end
-         
+        -- 报告只保留最近十六份纯标量，不保存 Context/Joint，不主动写盘。
         local row = { npc_id = tostring(entry.npc_id), generation = scene_generation }
         for key, value in pairs(result) do row[key] = value end
         metrics.recent[#metrics.recent + 1] = row

@@ -5,7 +5,7 @@
 #include <string>
 
 namespace stock_vm {
- 
+// These private entry points are valid only for the SHA-256-pinned 26.2.10.2 DLL.
 constexpr uintptr_t state_rva = 0xb6290;
 constexpr uintptr_t load_rva = 0x243a0;
 constexpr uintptr_t pcall_rva = 0x24280;
@@ -94,7 +94,7 @@ inline bool run(uintptr_t module, void *state, const char *code, size_t size, bo
             error = "private Lua registry/stack capacity rejected";
             return false;
         }
-         
+        // Equivalent to lua_pushvalue(L, LUA_REGISTRYINDEX); no registry/global mutation.
         std::memcpy(reinterpret_cast<void *>(end), registry, 16);
         end += 16;
         std::memcpy(static_cast<unsigned char *>(state) + 0x10, &end, sizeof(end));
@@ -110,4 +110,4 @@ inline bool run(uintptr_t module, void *state, const char *code, size_t size, bo
     }
     return status == 0;
 }
-}  
+} // namespace stock_vm

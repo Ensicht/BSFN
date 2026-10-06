@@ -1,7 +1,7 @@
- 
- 
- 
- 
+-- =============================================================================
+-- 表情策略与可选诊断
+-- =============================================================================
+-- 只在需要覆盖表情策略时复制源配置；不改写 BoneSystem 原配置。
 
 local function use_private_face_mode(target)
     if config.auto_apply_face_mapping == false then
@@ -13,7 +13,7 @@ local function use_private_face_mode(target)
     return config.default_private_face_mode == true
 end
 
- 
+-- 特殊脸或全局关闭映射时创建局部副本，源表仍供其他 NPC 和玩家共用。
 local function make_target_bone_data(bone_data, target)
     if type(bone_data) ~= "table" then
         return bone_data, false, "bonesystem"
@@ -194,7 +194,7 @@ local function probe_edit_region_source(obj, label, bind_part_name)
     return source
 end
 
- 
+-- 默认关闭的诊断路径；仅用于核对 Face 与 BindPart 的真实注册位置。
 local function build_edit_region_trace(character, root_obj, candidates, bone_data, target)
     if config.edit_region_trace == false then
         return nil

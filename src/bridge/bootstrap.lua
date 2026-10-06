@@ -1,4 +1,4 @@
- 
+-- 在原版 BoneSystem 的私有 Lua 状态执行；registry 只作为临时参数传入。
 local registry = ...
 assert(type(registry) == "table", "BoneSystem private registry missing")
 assert(type(sdk.fix_bone) == "function" and type(sdk.bind_face) == "function",
@@ -18,7 +18,7 @@ local function write_report()
     end
 end
 
- 
+-- 从原作者已注册回调的 upvalue 中取得相同闭包，不运行第二份 BoneSystem 脚本。
 local function attach()
     local seen, found = {}, {}
     local function original_info(fn)
@@ -62,7 +62,7 @@ local function attach()
     assert(script, err)
     report.fix_bone = debug.getinfo(found.fix_bone, "Su")
     report.load_data = debug.getinfo(found.load_data, "Su")
-     
+    -- Keep the original closures, their config upvalues and their owning Lua state.
     _G.BoneSystemNPCAPI = { fix_bone = found.fix_bone, load_data = found.load_data }
     _G.__BSFNStockBridgeAuthorized = true
     script()

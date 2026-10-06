@@ -5,8 +5,8 @@ namespace constraint_reader {
 enum Status { Compatible = 0, Pending = 2, FootWriter = 30, UnknownSections = 31,
               Invalid = 32, UncheckedSkin = 33, EmptyLayer = 34 };
 
- 
- 
+// SC is permitted by policy, not proven harmless. Inspect ordinary outputs even
+// when SC is present; never treat an unknown resource layout as an SC allowance.
 template<class Memory> int general(const Memory& memory, uintptr_t data) {
     if (!memory.range(data, 160, false)) return Invalid;
     bool unknown = forefoot::value<uint16_t>(data, 132) != 0;
@@ -28,11 +28,11 @@ template<class Memory> int general(const Memory& memory, uintptr_t data) {
 
 template<class Memory> int layer(const Memory& memory, uintptr_t pointer) {
     if (!memory.range(pointer, 0x28, false)) return Invalid;
-     
+    // Detached layers may still retain an asset; wait until they have an owner.
     if (!forefoot::value<uintptr_t>(pointer, 0x10)) return Pending;
     const auto resource = forefoot::value<uintptr_t>(pointer, 0x20);
-     
-     
+    // The native updater skips an attached layer without an assigned asset.
+    // An assigned resource has its own readiness flag; never collapse it into empty.
     if (!resource) return EmptyLayer;
     if (!memory.range(resource, 0x68, false)) return Invalid;
     if (!forefoot::value<uint8_t>(resource, 0x39)) return Pending;

@@ -1,9 +1,9 @@
- 
- 
- 
- 
- 
- 
+-- =============================================================================
+-- 普通场景龙人腿部 IK：等待目标骨链真正提交后修正当前实例
+-- =============================================================================
+-- 沿用注册表和加载暂停；成功后不再检查，不进入艺术馆或结算分支。
+-- 新建 holder/layer 不进入 Lua 包装缓存；原生模块在一次调用内持有、交付并释放。
+-- 这里只缓存函数，不缓存场景对象或资源，也不新增回调。
 local nonhuman_resources = (function()
     local exports, load_error = {}, nil
     return function(kind, root, component, count)
@@ -45,8 +45,8 @@ local nonhuman_ik = (function()
         return read(read(component, method), "get_ResourcePath")
     end
 
-     
-     
+    -- get_address 是 REFramework 的 Lua 绑定，不是可用 obj:call 反射的游戏方法。
+    -- tostring(obj) 是 Lua 包装身份，跨帧可变；不可把它当作原生指针的回退值。
     local function native_address(object)
         if not object then return nil end
         local ok, value = pcall(function() return object:get_address() end)
@@ -54,7 +54,7 @@ local nonhuman_ik = (function()
         return nil
     end
 
-     
+    -- 报告只存字符串和计数，最多十六条，不保留场景对象或主动写磁盘。
     local function record(entry, profile, status, detail)
         entry.nonhuman_ik_pending = nil
         entry.nonhuman_ik = { profile = profile, status = status, detail = tostring(detail or "") }
@@ -70,7 +70,7 @@ local nonhuman_ik = (function()
         bs_log("[NonhumanIK] " .. item.npc_id .. " " .. status .. " " .. item.detail)
     end
 
-     
+    -- 原始就绪样本已经由普通路径最终重取并校验；此处不额外遍历场景或部件树。
     function helper.prepare(candidate, state, entry, bone_data)
         if not state or not entry or entry.nonhuman_ik or not config.enabled
             or config.mode ~= "api_fix_bone" or config.auto_apply_bone == false
@@ -119,7 +119,7 @@ local nonhuman_ik = (function()
             return nil
         end
         metrics.prepared = metrics.prepared + 1
-         
+        -- 延后任务只保存标量身份；场景对象仍由原有 registered 缓存统一管理。
         return {
             profile = profile, candidate = candidate_address,
             component = component_address, motion = motion_address,
@@ -129,7 +129,7 @@ local nonhuman_ik = (function()
         }
     end
 
-     
+    -- 检查当前实例的完整父链，不能只凭目标文件名推断它一定属于人类骨架。
     local function human_leg_chain(candidate)
         local transform = get_transform(candidate)
         if not transform then return false, "missing current Transform" end
@@ -152,14 +152,14 @@ local nonhuman_ik = (function()
         return true
     end
 
-     
+    -- setter 只换资源并标记待构建；不能在 fix_bone 返回的同一调用里判定永久缺骨。
     function helper.finish(plan, bone_ok, entry)
         if not plan or not bone_ok then return end
         entry.nonhuman_ik_pending = plan
         entry.nonhuman_ik = { profile = plan.profile, status = "pending", detail = "waiting for native skeleton commit" }
     end
 
-     
+    -- 骨链十二次、setup 四次为短时检查额度；未就绪后降频，成功或身份失效才结束。
     function helper.update(entry, now)
         local plan = entry.nonhuman_ik_pending
         if not nonhuman_retry.ready(plan, now) then return end
@@ -223,7 +223,7 @@ local nonhuman_ik = (function()
                 end
                 return "pending", "asset assigned; waiting for native IK setup"
             end
-             
+            -- 已验证的同一实例交给原生辅助器；锁忙沿用原节流，其他失败不重复写入。
             local result = nonhuman_resources("ik", plan.candidate, plan.component)
             if result == 2 then return "pending", "native Scene lock busy; throttled retry" end
             assert(result == 0, "native IK resource guard=" .. tostring(result))

@@ -30,8 +30,8 @@ struct Diagnostic {
     void enter(const char* stage) { if (!failed) { phase = stage; method = "none"; } }
 };
 
- 
- 
+// REF InvokeRet is a packed 128-byte value followed by the exception flag.
+// Keep the buffer aligned too; the flag offset, not sizeof of a C++ union, is the ABI.
 struct alignas(16) Result {
     std::array<unsigned char, 144> bytes{};
     template<class T> T get() const { T out{}; std::memcpy(&out, bytes.data(), sizeof(out)); return out; }
@@ -200,7 +200,7 @@ template<class Memory> class Operation {
     }
     bool settings(Object layer, bool paused) {
         uint8_t pause{}, timing{};
-         
+        // Single 方法返回经 invoke 包装提升为 double；不能按原字段的 float 布局读取。
         double blend{};
         if (!read(get_pause, layer, pause) || !read(get_timing, layer, timing) ||
             !read(get_blend, layer, blend)) return false;
@@ -228,7 +228,7 @@ template<class Memory> class Operation {
             if (current != static_cast<int32_t>(count + 1)) return false;
             Object tail{};
             if (!read(get_layer, component, tail, {count}) || (tail && tail != ours)) return false;
-             
+            // Do not retry a failed mutating call: it may already have committed.
             call(set_count, component, {count});
             return read(get_count, component, current) && current == static_cast<int32_t>(count) && originals(original, count);
         } catch (...) { return false; }
@@ -241,7 +241,7 @@ public:
           holder_type(f ? "via.motion.JointConstraintsResourceHolder" : "via.motion.IkLeg2ResourceHolder"),
           resource_pin(r), holder(r), layer(r) {}
 
-     
+    // Allocation/resource loading is outside the scene critical section. No scene objects are touched.
     int prepare() {
         diagnostic.enter("metadata");
         if (!resolve()) return BadSignature;
@@ -250,7 +250,7 @@ public:
         if (!manager) return ResourceFailed;
         auto resource = sdk->resource_manager->create_resource(manager, resource_type, fingers ? fingers_path : ik_path);
         if (!resource) return ResourceFailed;
-         
+        // create_resource returns its creation credit. create_holder owns a separate resource credit.
         resource_pin.adopt(resource);
         diagnostic.enter("holder.create");
         auto new_holder = sdk->resource->create_holder(resource, holder_type);
@@ -267,7 +267,7 @@ public:
             diagnostic.enter("layer.configure");
             Resource empty{};
             if (!asset(new_layer, empty) || empty) return LayerFailed;
-             
+            // 方法的 Single 入参也使用 double 槽位，不能套用直接写 float 字段的布局。
             if (!call(set_pause, new_layer, {1}) || !call(set_timing, new_layer, {0}) ||
                 !call(set_asset, new_layer, {reinterpret_cast<uintptr_t>(new_holder)}) ||
                 !call(set_blend, new_layer, {0x3ff0000000000000ULL})) return InvokeFailed;
@@ -302,7 +302,7 @@ public:
         if (!fingers) {
             if (!owner()) return BadOwner;
             diagnostic.enter("ik.assign");
-             
+            // IK is a single submission, including the error path. No speculative second setter.
             if (!call(set_asset, component, {reinterpret_cast<uintptr_t>(new_holder)})) return InvokeFailed;
             Resource current{};
             return asset(component, current) && current == resource ? Applied : ReadbackFailed;
@@ -313,7 +313,7 @@ public:
         int status = InvokeFailed;
         diagnostic.enter("fingers.append");
         try {
-             
+            // From this point even a reported failure may have grown/attached the tail.
             bool grew = call(set_count, component, {expected_count + 1});
             Object tail{};
             if (grew && read(get_count, component, count) && count == static_cast<int32_t>(expected_count + 1) &&
@@ -325,13 +325,13 @@ public:
                     originals(original, expected_count) && owner()) return Applied;
             }
         } catch (...) { status = Unexpected; }
-        diagnostic.failed = true;  
+        diagnostic.failed = true; // Preserve the original failure through guarded rollback.
         return rollback(original, expected_count, new_layer) ? status : RollbackFailed;
     }
 };
 
- 
- 
+// Prepared private objects never enter Lua. The scene lease encloses only validation/commit;
+// its destruction precedes releasing the private holder/layer and resource creation credit.
 template<class Memory, class Lock>
 int execute(const REFrameworkSDKData* sdk, Memory& memory, uintptr_t root, uintptr_t component,
             unsigned expected_count, bool fingers, Lock acquire_lock, Diagnostic* output = nullptr) noexcept {
@@ -354,4 +354,4 @@ int execute(const REFrameworkSDKData* sdk, Memory& memory, uintptr_t root, uintp
     catch (...) { diagnostic.native_exception = true; result = Unexpected; }
     return refs.cleanup_failed ? CleanupFailed : result;
 }
-}  
+} // namespace bsfn_resource

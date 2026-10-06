@@ -13,7 +13,7 @@ constexpr std::array<uint32_t, 6> hashes = {
     0x4d0e10c5, 0x6ded958a, 0x87f13496, 0x20bd0d5c, 0x17b78c57, 0x31754433};
 constexpr std::array<unsigned, 4> targets = {1, 2, 4, 5};
 struct Request { Address root_object, root, body_object, body, mesh; };
- 
+// 原生四元数 setter 使用对齐的 SIMD 读取，三个输入块均保留 16 字节对齐。
 struct alignas(16) Pose { float position[4]{}, rotation[4]{}, scale[4]{}; };
 struct Patch { Address joint, map; Pose bind; };
 struct Plan { std::array<Patch, 4> patches{}; bool already = false; };
@@ -44,7 +44,7 @@ inline bool same_pose(const Pose& a, const Pose& b) {
     return true;
 }
 
- 
+// 先校验整组四项。所有校验失败均不写入；不保留任何跨调用的游戏地址。
 template<class Memory>
 Status prepare(Memory& memory, const Request& r, Plan& plan) {
     plan = {};
@@ -132,13 +132,13 @@ Status prepare(Memory& memory, const Request& r, Plan& plan) {
         if (!valid_pose(current)) return BadPose;
         locals_equal = locals_equal && same_pose(current, patch.bind);
     }
-     
+    // 不接管别人已经解除的部分绑定，也不逐帧修复外部写入者。
     if (detached && (detached != 4 || !locals_equal)) return BadMapping;
     plan.already = detached == 4;
     return plan.already ? Already : Applied;
 }
 
- 
+// 调用者持原生 Scene 锁。回调复用原生 Local setter 和 dirty 传播，绝不调用 World setter。
 template<class Setters>
 Status commit(const Plan& plan, Setters& setters) {
     if (plan.already) return Already;
@@ -153,4 +153,4 @@ Status commit(const Plan& plan, Setters& setters) {
     }
     return Applied;
 }
-}  
+} // namespace forefoot

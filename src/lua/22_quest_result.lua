@@ -1,8 +1,8 @@
- 
- 
- 
- 
- 
+-- =============================================================================
+-- 结算动画接管：独立于普通 NPC 和艺术馆，不增加普通帧扫描。
+-- =============================================================================
+-- 在 WAIT-pre 应用骨架；结算动作内等待最终槽表后仅补全隐藏/表情。
+-- 不写动作阶段、计时器、播放速度、根位移，也不保留任何 managed 对象。
 local function install_quest_result_hooks()
     local states, state_order = {}, {}
     local paused = false
@@ -22,7 +22,7 @@ local function install_quest_result_hooks()
         if ok then return value end
     end
 
-     
+    -- 仅结算动作内采样；不枚举关节、不写姿态、不保存 managed 包装对象。
     local trace_offsets = { 0, 0, 0.15, 0.4, 0.8, 1.5, 3, 5 }
     local trace_joints = { "L_UpEyeLidJ_LOD02", "R_UpEyeLidJ_LOD02",
         "C_upLip_LOD02", "C_loLip_LOD02", "C_Jaw_LOD02" }
@@ -31,7 +31,7 @@ local function install_quest_result_hooks()
         if not value then return end
         local ok, result = pcall(function()
             local item = { x = tonumber(value.x), y = tonumber(value.y), z = tonumber(value.z) }
-             
+            -- Vector3 没有 w；不能因此丢弃整个位置/缩放快照。
             local has_w, w = pcall(function() return value.w end)
             if has_w then item.w = tonumber(w) end
             return item
@@ -85,8 +85,8 @@ local function install_quest_result_hooks()
 
     local face_relay = make_quest_face_relay(field, call, edit_root_for, quest)
 
-     
-     
+    -- 精确复现 DLL 回调的查找方向：驱动所属对象 -> RegionRoot -> Face。
+    -- owner 槽只能作为对照，不能替代 DLL 实际读取的源脸。
     local function face_trace_snapshot(action, state, stage)
         local motion = field(action, "_NpcMotionComponent")
         local owner = motion and get_game_object_quiet(motion)
@@ -130,7 +130,7 @@ local function install_quest_result_hooks()
             item.joints[name] = { source = joint_snapshot(source_transform, name),
                 target = joint_snapshot(target_transform, name) }
         end
-         
+        -- 查找链不一致时，仍保留 owner 原生脸的同名骨骼，避免把“查错脸”误判为不播放表情。
         if expected_face and not item.faces_agree then
             item.expected_face_joints = {}
             local transform = get_transform(expected_face)
@@ -191,7 +191,7 @@ local function install_quest_result_hooks()
         sample_face_trace(action, state, "before_face_api")
     end
 
-     
+    -- 只读最终部件，不保留 Mesh；最多三个部件、每部件128个材质。
     local function part_snapshot(part)
         local item = { object = tostring(part), name = get_game_object_name_quiet(part) }
         if not part then return item end
@@ -211,7 +211,7 @@ local function install_quest_result_hooks()
         return item
     end
 
-     
+    -- 快照只含标量；报告按钮可在动画结束后使用，不会因此留住旧场景对象。
     local function snapshot(action, motion)
         local result = {
             phase = tonumber(field(action, "_Phase")),
@@ -233,7 +233,7 @@ local function install_quest_result_hooks()
             end
             local skeleton = owner and get_component(owner, "via.motion.CustomSkeleton")
             local holder = skeleton and call(skeleton, "get_SkeletonResourceHandle")
-             
+            -- getter 每次创建包装对象，包装地址不能用于证明资源被覆盖。
             result.resource_path = tostring(call(holder, "get_ResourcePath"))
             result.custom_skeleton = tostring(skeleton)
             result.auto_apply = tostring(call(skeleton, "get_AutoApply"))
@@ -276,7 +276,7 @@ local function install_quest_result_hooks()
     local function remember(state, status)
         state.status = status
         quest.last_status = status
-         
+        -- 每个动作仅留一条有限标量摘要，后一次成功不能覆盖前一次取消原因。
         if not state.summary then
             state.summary = { action = state.key, scene_generation = state.generation, started = state.started }
             quest.recent_results[#quest.recent_results + 1] = state.summary
@@ -341,7 +341,7 @@ local function install_quest_result_hooks()
         local creator = field(action, "_NpcVisualCreator")
         if not creator or call(creator, "get_IsCreated") ~= true then return end
 
-         
+        -- 必须使用动作明确持有的 NPC Motion，禁止回退到玩家或全场景搜索。
         local motion = field(action, "_NpcMotionComponent")
         local owner = motion and get_game_object_quiet(motion)
         if not owner or not same_runtime_object(owner, get_game_object_quiet(creator)) then
@@ -419,9 +419,9 @@ local function install_quest_result_hooks()
             local data = load_bone_config(resolution.target.bone_system_body_id or resolution.body_id)
             local face_data = make_target_bone_data(data, resolution.target)
             if type(face_data) == "table" then
-                 
+                -- make_target_bone_data 可能返回共享原表；必须复制，不能关掉全局骨骼功能。
                 state.face_data = { FixBone = false }
-                 
+                -- 动作退出和场景代际负责正常取消；总上限仅防异常动作永久等待。
                 state.face_deadline = os.clock() + 60
                 state.face_checks = 0
                 for _, name in ipairs({ "Enable", "HideFace", "HideHair", "HideSlinger", "BindFace", "BindPart", "DispOffOutDoorCookingHelm" }) do
@@ -433,7 +433,7 @@ local function install_quest_result_hooks()
         return state
     end
 
-     
+    -- 骨架和差分时机不变；仅未完成的面部项可继续进入同一结算动作的 post。
     local function prepare(action)
         quest.calls = quest.calls + 1
         local key = quest_object_address(action)
@@ -483,7 +483,7 @@ local function install_quest_result_hooks()
         end
     end
 
-     
+    -- Face 已就绪而绑定部件尚未注册时，先复用原 API 隐藏一次，不重复绑定。
     local function hide_ready_face(owner, state)
         local data = state.face_data
         if state.hide_attempts or data.Enable == false or data.HideFace ~= true then return end
@@ -498,8 +498,8 @@ local function install_quest_result_hooks()
         remember(state, state.status)
     end
 
-     
-     
+    -- 原版 fix_bone 在 FixBone=false 时只执行 fix_hide，不创建/写骨架。
+    -- creator 完成不等于 hash 槽已注册；只等槽表，不重复调用绑定 API。
     local function finish_face(action, state)
         local face_data = state.face_data
         if not face_data then return end
@@ -525,7 +525,7 @@ local function install_quest_result_hooks()
             return
         end
         state.face_wait_confirmed = true
-         
+        -- 原生 MotPhase.NONE 是准备态，不是结束态；实际 doExit 仍立即撤销待办。
         if mot_phase == 0 then
             face_status(state, "waiting for native motion setup", false)
             return
@@ -536,11 +536,11 @@ local function install_quest_result_hooks()
         end
         if state.next_face_probe and now < state.next_face_probe then return end
         state.face_checks = state.face_checks + 1
-         
+        -- 同一等待原因可能持续多帧；更新现有标量摘要，不追加事件或写报告。
         if state.summary then
             state.summary.face_checks, state.summary.face_last_check = state.face_checks, now
         end
-         
+        -- 常见的下一回调就绪仍立即完成；慢路径每秒最多约20次，不在普通帧扫描。
         state.next_face_probe = state.face_checks >= 4 and now + 0.05 or nil
         local motion = field(action, "_NpcMotionComponent")
         local owner = motion and get_game_object_quiet(motion)
@@ -596,7 +596,7 @@ local function install_quest_result_hooks()
         end
         if state.diagnostics then state.face_ready = snapshot(action, motion) end
         if state.diagnostics and face_data.BindFace == true then
-             
+            -- 诊断失败不能取消已经就绪的原版显隐/绑定调用。
             local traced, trace_error = pcall(begin_face_trace, action, state, bind_hash)
             if not traced then
                 quest.trace_errors = quest.trace_errors + 1
@@ -604,7 +604,7 @@ local function install_quest_result_hooks()
                 stop_face_trace(state, "trace initialization failed")
             end
         end
-         
+        -- 先关闭待办；异常也不能引发下一帧重复绑定。
         state.face_data = nil
         state.face_attempts = (state.face_attempts or 0) + 1
         quest.face_attempts = quest.face_attempts + 1
@@ -641,7 +641,7 @@ local function install_quest_result_hooks()
         if ok then return storage end
     end
 
-     
+    -- 原生 UPDATE_RESULT.END=1；结束时阶段字段未必改变，不能据旧阶段继续补脸。
     local function native_update_result(retval)
         local value = type(retval) == "number" and retval or nil
         if not value and sdk.to_int64 then
@@ -665,7 +665,7 @@ local function install_quest_result_hooks()
                 storage.bsfn_quest_action = nil
                 storage.bsfn_quest_state = nil
                 if not config.enabled or scene_transition.active then
-                     
+                    -- 不清除已执行标记；重新开启时不能重做骨架或恢复旧面部待办。
                     if not paused then
                         paused = true
                         for _, state in pairs(states) do

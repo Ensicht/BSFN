@@ -1,9 +1,9 @@
- 
- 
- 
- 
+-- =============================================================================
+-- 目标解析与未命中缓存
+-- =============================================================================
+-- 保留显式目标优先级；自动候选按身体编号查字典，不逐套装匹配。
 
- 
+-- 男女猎人装备使用同一字典；原生脸、NPC本体和其他模型前缀不参与自动匹配。
 local function body_id_from_object_name(name)
     return string.match(tostring(name or ""), "(ch0[23]_%d%d%d_%d%d%d%d)")
 end
@@ -98,7 +98,7 @@ local function collect_scan_roots(root_obj, extra_roots)
     return roots
 end
 
- 
+-- 直接 Chest 不可用时才遍历有限子树，已找到的载体按对象身份复用。
 local function scan_fallback_outfit(root_obj, expected_body_id, entry, extra_roots)
     performance.fallback_scans = performance.fallback_scans + 1
     local scanned = {}
@@ -209,7 +209,7 @@ local function npc_is_auto_blocked(npc_id)
     return false
 end
 
- 
+-- 空 Chest 的未命中键包含根对象，避免艺术馆中的空模型污染正常场景的同名 NPC。
 local function make_session_unmatched_key(npc_id, chest_state, root_obj, allow_empty)
     chest_state = chest_state or {}
     local identity = tostring(npc_id or "")
@@ -226,7 +226,7 @@ local function make_session_unmatched_key(npc_id, chest_state, root_obj, allow_e
             return nil
         end
         chest_name = "<not_loaded>"
-         
+        -- An empty Chest is a loading state; keep its miss local to this model object.
         local root_identity = tostring(root_obj or "")
         if root_identity ~= "" and root_identity ~= identity then
             identity = identity .. "@" .. root_identity
@@ -235,7 +235,7 @@ local function make_session_unmatched_key(npc_id, chest_state, root_obj, allow_e
     return table.concat({ tostring(dictionary_generation), identity, chest_body_id, chest_name }, "|")
 end
 
- 
+-- 玩家隔离 -> 专属规则 -> 自动字典；未命中缓存和艺术馆隔离选项在同一处执行。
 local function resolve_target(character, root_obj, entry, options)
     options = options or {}
     local npc_id = options.npc_id or read_npc_id(character, root_obj)

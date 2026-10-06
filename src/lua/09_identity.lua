@@ -1,7 +1,7 @@
- 
- 
- 
- 
+-- =============================================================================
+-- 对象遍历与玩家隔离
+-- =============================================================================
+-- 有界子对象遍历；所有玩家含晚到的联机副本在自动匹配前排除。
 
 local function collect_child_game_objects(root_obj)
     local result = {}
@@ -155,7 +155,7 @@ local function matches_player_instance(character, root_obj, player, label)
     return false, nil
 end
 
- 
+-- 先排除玩家根对象，再按需核对原生玩家集合；不能假设联机玩家按固定顺序出现。
 local function is_any_player_character(character, root_obj, check_player_manager)
     local root_name = get_game_object_name(root_obj)
     local lower_root_name = string.lower(tostring(root_name or ""))

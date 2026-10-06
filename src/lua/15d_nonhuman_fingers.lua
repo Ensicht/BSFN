@@ -1,7 +1,7 @@
- 
- 
- 
- 
+-- =============================================================================
+-- 四指原生角色的小指跟随：实例私有约束层，等待目标骨架提交后安装一次
+-- =============================================================================
+-- 不改原生层，不保留 Joint/Layer 包装，不添加帧回调；只进入普通 NPC 路径。
 local nonhuman_fingers = (function()
     local helper = {}
     local destination = "BoneSystemForNPC/Constraints/WyverianPinky_DSG.jcns"
@@ -45,7 +45,7 @@ local nonhuman_fingers = (function()
         bs_log("[NonhumanFingers] " .. tostring(entry.npc_id) .. " " .. status .. " " .. tostring(detail))
     end
 
-     
+    -- 验证完整父链和有效绑定旋转；原生约束提取 Ring 的相对动作并保留 Pinky 自身初始姿态。
     function helper.prepare(candidate, state, entry, bone_data)
         if not state or not entry or entry.nonhuman_fingers or not config.enabled
             or config.mode ~= "api_fix_bone" or config.auto_apply_bone == false
@@ -86,14 +86,14 @@ local nonhuman_fingers = (function()
         entry.nonhuman_fingers = { status = "pending", detail = "waiting for target finger chain" }
     end
 
-     
+    -- 只验证静止基准，不限制当前手势。目标小指各自的位置、长度始终由原模型保留。
     local function valid_bind_rotation(rotation)
         if not rotation then return false end
         local ok, result = pcall(function()
             local x, y, z, w = rotation.x, rotation.y, rotation.z, rotation.w
             if type(x) ~= "number" or type(y) ~= "number" or type(z) ~= "number" or type(w) ~= "number" then return false end
             local norm = x * x + y * y + z * z + w * w
-             
+            -- NaN/Inf/退化四元数均不能进入原生相对旋转计算；不限制正常的初始张开角度。
             return norm == norm and math.abs(norm - 1) < 0.001
         end)
         return ok and result == true
@@ -124,7 +124,7 @@ local nonhuman_fingers = (function()
         return true
     end
 
-     
+    -- 保留现有层和重复安装检查；新建层的引用、配置和尾槽回滚全部在原生调用内完成。
     local function append_layer(component, plan)
         local count = read(component, "getLayerCount")
         assert(type(count) == "number" and count >= 1 and count < max_layers and count % 1 == 0, "invalid layer count")

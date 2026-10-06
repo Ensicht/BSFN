@@ -1,7 +1,7 @@
- 
- 
- 
- 
+-- =============================================================================
+-- 差分文件与实际材质载体
+-- =============================================================================
+-- 按材质名称选择实际承载部件，兼容头发和身体合并模型；不用旧的纯后缀选槽路径。
 
 local function load_armor_variant_config(body_id)
     if not body_id or body_id == "" then
@@ -200,7 +200,7 @@ local function count_material_matches_for_part(part_obj, part_data)
     return result
 end
 
- 
+-- 同时考虑原生装备槽、艺术馆最终部件和合并模型；不把私有脸或隐藏辅助体当作可见服装。
 local function collect_armor_variant_part_candidates(character, root_obj, body_id, part_index, part_data, extra_roots)
     local candidates = {}
     local seen = {}
@@ -285,7 +285,7 @@ local function is_usable_armor_variant_candidate(candidate, part_data)
     return (candidate.exact_part_name or candidate.is_hunter_armor) and not candidate.blocked_private_chain
 end
 
- 
+-- 材质匹配验证实际载体，避免名称像 Helm 而头发实际上已合并到 Body 的误选。
 local function choose_armor_variant_part_for_index(character, root_obj, body_id, part_index, part_data, operation, extra_roots)
     local candidates = collect_armor_variant_part_candidates(character, root_obj, body_id, part_index, part_data, extra_roots)
     local best = nil

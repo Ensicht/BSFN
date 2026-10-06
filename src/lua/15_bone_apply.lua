@@ -1,9 +1,9 @@
- 
- 
- 
- 
+-- =============================================================================
+-- 骨骼应用与保留的底层诊断
+-- =============================================================================
+-- 默认只调用原版 fix_bone，不预创建第二份骨骼资源。非默认诊断分支保留但不推荐启用。
 
- 
+-- 正常路径在原版 API 调用后立即返回，避免落入后面的历史资源诊断分支。
 local function perform_stage(candidate, motion, custom_skeleton, target, bone_body_id, bone_data)
     local mode = tostring(config.mode or "probe")
     local operation = {

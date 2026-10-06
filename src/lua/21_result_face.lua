@@ -1,5 +1,5 @@
- 
- 
+-- 结算身份使用原生地址；Lua 弱缓存重建包装后，tostring 不能用于跨回调比较。
+-- 地址只作标量身份，不据此还原或保活对象；每次仍从当前原生动作取得对象。
 local function quest_object_address(object)
     if not object then return end
     local ok, address = pcall(function() return object:get_address() end)
@@ -8,8 +8,8 @@ local function quest_object_address(object)
     if address and address > 0 then return address end
 end
 
- 
- 
+-- 结算专用表情传递：只保留骨名、基准差和身份标量，不持有场景对象。
+-- LockScene 前重新取得本机当前动作，避开胸部 ChildSecondary 回调的调度差异。
 local function make_quest_face_relay(field, call, edit_root_for, quest)
     local ticket
     local relay = {}
@@ -20,7 +20,7 @@ local function make_quest_face_relay(field, call, edit_root_for, quest)
         return type(value) == "number" and value == value and math.abs(value) < math.huge
     end
 
-     
+    -- 仅接收原生脸中的表情骨；不能沿用原 DLL 的“所有同名骨”到人物根。
     local function facial_name(name)
         if type(name) ~= "string" or #name > 96 then return false end
         if name == "L_Eye" or name == "R_Eye" then return true end
@@ -42,7 +42,7 @@ local function make_quest_face_relay(field, call, edit_root_for, quest)
         if state.face_relay then state.face_relay.status = reason end
     end
 
-     
+    -- 只在首次有效渲染帧建立映射；不缓存 Joint、Transform 或 Motion。
     local function build_map(source, target)
         local joints = call(source, "get_Joints")
         local count = tonumber(joints and call(joints, "get_Length"))
@@ -140,8 +140,8 @@ local function make_quest_face_relay(field, call, edit_root_for, quest)
             return stop(state, "skeleton reconstructed; old map discarded")
         end
 
-         
-         
+        -- 值类型是 getter 返回的副本。采用原 BoneSystem 的逐分量基准差算法，
+        -- 不归一化/重定向，不触碰 Head、Neck、root 或动作播放参数。
         local writes = 0
         for _, item in ipairs(state.relay_map) do
             local a = call(source, "getJointByName", item.name)
@@ -163,7 +163,7 @@ local function make_quest_face_relay(field, call, edit_root_for, quest)
         end
         local info = state.face_relay
         info.frames, info.writes, info.status = info.frames + 1, info.writes + writes, "copying facial joints"
-         
+        -- 三次少量回读留在同一份 BSFN 报告，避免只凭 API 成功宣称面部已动。
         if state.diagnostics and (info.frames == 1 or info.frames == 30 or info.frames == 120) then
             local sample = { frame = info.frames, time = os.clock(), joints = {} }
             for _, name in ipairs({ "L_UpEyeLidJ_LOD02", "C_upLip_LOD02", "C_Jaw_LOD02" }) do
@@ -202,7 +202,7 @@ local function make_quest_face_relay(field, call, edit_root_for, quest)
     relay.stop = stop
     if re and re.on_pre_application_entry then
         re.on_pre_application_entry("LockScene", function()
-             
+            -- 一张票只消费一次。没有本帧结算 doUpdate 就不会查找角色或重放旧姿态。
             local state = ticket
             if not state then return end
             ticket = nil

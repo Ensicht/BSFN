@@ -15,7 +15,7 @@ static constexpr char expected_hash[] =
 static_assert(offsetof(REFrameworkPluginFunctions, create_script_state) == 0x68);
 static_assert(offsetof(REFrameworkPluginInitializeParam, functions) == 0x10);
 
- 
+// Pair the host Lua lock on every return path; this adapter runs only at startup.
 struct LuaLock {
     LuaLock() {
         api->lock_lua();
@@ -25,7 +25,7 @@ struct LuaLock {
     }
 };
 
- 
+// Private entry points are accepted only when loaded bytes match the pinned file.
 static bool same_entry_bytes(uintptr_t base, const wchar_t *path) {
     HANDLE file =
         CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
@@ -129,7 +129,7 @@ reframework_plugin_initialize(const REFrameworkPluginInitializeParam *param) {
     return true;
 }
 
- 
+// Re-read the current private state under the host lock; never retain an old state.
 extern "C" __declspec(dllexport) int bsfn_bootstrap(lua_State *main_state) {
     if (!api)
         return 0;

@@ -33,8 +33,8 @@ struct Memory {
     }
 };
 
- 
- 
+// 仅接收七个 Lua 5.4 整数，在现有末参数槽返回整数；无分配、Lua 回调或私有 VM 调用。
+// 先检查整段栈与 CallInfo 容量，再解码；不接受 float、userdata 或指针字符串。
 struct Arguments {
     std::array<uintptr_t, 7> values{};
     uintptr_t result = 0;
@@ -75,8 +75,8 @@ bool reject_host(const char* reason, uintptr_t detail = 0) {
     return false;
 }
 
- 
- 
+// PE 只负责体系结构和边界，不以编译时间戳/整文件大小认定兼容性。
+// 所有探测均限定在镜像节内，失败不调用原生代码，不靠试加锁验证布局。
 struct ImageContract {
     const IMAGE_NT_HEADERS64* nt = nullptr;
     const IMAGE_SECTION_HEADER* sections = nullptr;
@@ -98,7 +98,7 @@ struct ImageContract {
         if (offset > nt->OptionalHeader.SizeOfHeaders || bytes > nt->OptionalHeader.SizeOfHeaders - offset ||
             !memory.range(game_base + offset, bytes, false)) return false;
         sections = reinterpret_cast<const IMAGE_SECTION_HEADER*>(game_base + offset);
-         
+        // 节区重叠/溢出不能为同一地址提供相互矛盾的权限证明。
         for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; ++i) {
             const auto& s = sections[i];
             const size_t size = s.Misc.VirtualSize;
@@ -132,8 +132,8 @@ struct ImageContract {
     }
 };
 
- 
- 
+// 首次使用只核验固定范围的接口/布局证据，成功与失败均缓存，不新增帧扫描。
+// UpdateTransform 仅检查 REFramework 未挂钩的内部窗口；不调用或覆盖它。
 bool supported_host() {
     if (host_state) return host_state > 0;
     if (!host) return false;
@@ -221,7 +221,7 @@ struct ResourceSceneLock {
         const auto slot = game_base + host_layout::scene_slot;
         if (!memory.range(slot, sizeof(uintptr_t), false)) return;
         const auto scene = forefoot::value<uintptr_t>(slot);
-         
+        // Compare the scalar before touching a possibly retired scene's critical section.
         if (!scene || scene != expected_scene || scene > std::numeric_limits<uintptr_t>::max() - host_layout::scene_lock ||
             !memory.range(scene + host_layout::scene_lock, sizeof(CRITICAL_SECTION), true)) return;
         lock = reinterpret_cast<CRITICAL_SECTION*>(scene + host_layout::scene_lock);
@@ -232,8 +232,8 @@ struct ResourceSceneLock {
     ~ResourceSceneLock() { if (lock) LeaveCriticalSection(lock); }
 };
 
- 
- 
+// Read-only compatibility check; original layers and resources are never edited.
+// Keep these extra witnesses local to this optional path, not the existing IK gate.
 int inspect_constraint(const Arguments& args) {
     if (!args.values[1] || args.values[2] || args.values[3] || args.values[4] || args.values[5])
         return constraint_reader::Invalid;
@@ -244,7 +244,7 @@ int inspect_constraint(const Arguments& args) {
         verified = -1;
         ImageContract image;
         const std::array<host_layout::Witness, 4> witnesses = {{
-             
+            // Native update: owner, assigned asset, then resource readiness.
             {0x6389f, std::string_view("\x48\x83\x79\x10\x00\x0f\x84\xaa\x06\x00\x00\x48\x89\xce\x48\x8b\x49\x20\x48\x85\xc9\x0f\x84\x9a\x06\x00\x00\x80\x79\x39\x00\x75\x0d\xe8\xbb\xeb\xfa\xff\x84\xc0\x0f\x84\x87\x06\x00\x00", 46)},
             {0xc3d7930, std::string_view("\x48\x89\xd1\xe9\xb8\x6d\xa3\x00", 8)},
             {0xce0e6f0, std::string_view("\x48\x83\xec\x28\x48\x83\xc1\x20\xe8\x93\xb6\x81\xfd\x48\x85\xc0\x74\x0c\x0f\xb7\x80\x88\x00\x00\x00", 25)},
@@ -300,7 +300,7 @@ int apply_resource(const Arguments& args, bool fingers) {
     int result;
     try { result = apply_resource_impl(args, fingers, diagnostic); }
     catch (...) { diagnostic.native_exception = true; result = bsfn_resource::Unexpected; }
-     
+    // Only a diagnostic budget is global; no target/resource identity is retained.
     if (result >= 10 && host && host->functions && host->functions->log_error) {
         unsigned count = resource_error_logs.load(std::memory_order_relaxed);
         while (count < 8 && !resource_error_logs.compare_exchange_weak(count, count + 1, std::memory_order_relaxed)) {}
@@ -315,7 +315,7 @@ int apply_resource(const Arguments& args, bool fingers) {
     }
     return result;
 }
-}  
+} // namespace
 
 extern "C" __declspec(dllexport) void reframework_plugin_required_version(REFrameworkPluginVersion* v) {
     v->major = 1; v->minor = 15; v->patch = 0; v->game_name = nullptr;

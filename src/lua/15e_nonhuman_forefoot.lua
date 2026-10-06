@@ -1,11 +1,11 @@
- 
- 
- 
- 
- 
+-- =============================================================================
+-- 龙人外观模型前掌：换骨完成期的一次性实例绑定修正
+-- =============================================================================
+-- 不改 root 姿态、IK、共享资源或既有约束层；没有新 Hook/帧回调。
+-- 骨架后续独立重建可能恢复原生映射，当前实现不添加轮询来维持这四项。
 local nonhuman_forefoot = (function()
     local helper = {}
-     
+    -- 前二十次短时确认之后按普通检查间隔降频；只在当前注册对象存活且近期更新时查询。
     local max_checks, interval = 20, 0.05
     local native_apply, native_error, native_inspect
     local metrics = { prepared = 0, applied = 0, skipped = 0, errors = 0,
@@ -62,7 +62,7 @@ local nonhuman_forefoot = (function()
         return native_apply
     end
 
-     
+    -- 与 IK/手指共用已缓存的原生分类，不能按人物名字或身体高度猜龙人。
     function helper.prepare(candidate, state, entry, bone_data, body_id)
         if not state or not entry or entry.nonhuman_forefoot or not config.enabled
             or config.mode ~= "api_fix_bone" or config.auto_apply_bone == false
@@ -87,7 +87,7 @@ local nonhuman_forefoot = (function()
         entry.nonhuman_forefoot = { status = "pending", detail = "waiting for own BODY binding" }
     end
 
-     
+    -- 只看当前 NPC 的直接子对象，最多 32 个；等待时限频，成功后不再访问。
     local function current_body(root_transform, body_id)
         local transform = read(root_transform, "get_Child")
         local found, seen = nil, {}
@@ -106,9 +106,9 @@ local nonhuman_forefoot = (function()
         return nil
     end
 
-     
-     
-     
+    -- 原生输出表不覆盖所有约束类型，不能仅凭空输出表认定没有写入。
+    -- DLL 在场景锁内读取已验证格式；SC 默认允许共存，不代表已确认没有脚骨写入。
+    -- 仍拦截已识别的脚骨写入、未知格式和独立换骨，不修改作者原有约束。
     local function body_components(object)
         local custom = get_component(object, "via.motion.CustomSkeleton")
         if custom then
@@ -143,7 +143,7 @@ local nonhuman_forefoot = (function()
             local result = native_inspect(0x42534638, pointer, 0, 0, 0, 0, 0)
             if result == 2 then return "pending", "BODY constraint resource/Scene not ready" end
             if result == 30 then return "skipped", "BODY constraint writes foot; ordering not verified" end
-             
+            -- 空层由原生检查确认；仍继续检查后续层，不能掩盖未加载或写脚骨的约束。
             if result ~= 0 and result ~= 33 and result ~= 34 then return "skipped", "BODY constraint format not verified; native=" .. tostring(result) end
             if result == 33 then unchecked_skin = true end
             if result == 34 then empty_layers = empty_layers + 1 end
@@ -201,7 +201,7 @@ local nonhuman_forefoot = (function()
             if not root_id or not body_id or not transform_id or not mesh_id then return "skipped", "native identity unavailable" end
             metrics.native_calls = metrics.native_calls + 1
             local result = apply(0x42534638, plan.root, root_id, body_id, transform_id, mesh_id, 0)
-             
+            -- 当前包装对象保持到调用结束，不把 Joint/map 地址保存到任何缓存。
             if address(root) ~= plan.root or address(object) ~= body_id or address(mesh) ~= mesh_id then
                 return "error", "identity changed across native call"
             end

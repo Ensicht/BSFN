@@ -1,9 +1,9 @@
- 
- 
- 
- 
+-- =============================================================================
+-- 全屏任务菜单暂停
+-- =============================================================================
+-- 进入任务列表后锁存暂停，直到 GUI050000 完全退出；冻结计时而不清空人物。
 
- 
+-- 缓存寿命按实际运行时间计算，打开菜单不会把仍在场的 NPC 判定为超时。
 local function normal_runtime_clock()
     local now = os.clock()
     local active_pause = normal_runtime_pause_started and (now - normal_runtime_pause_started) or 0
@@ -22,7 +22,7 @@ local function resolve_quest_menu_id()
     return quest_menu_id
 end
 
- 
+-- NPC 对话本身不是全屏菜单；只在任务列表首次激活后锁存到整个 GUI 消失。
 local function read_quest_fullscreen_open()
     local menu_id = resolve_quest_menu_id()
     if menu_id == nil then return false end

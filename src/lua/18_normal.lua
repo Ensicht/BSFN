@@ -1,9 +1,9 @@
- 
- 
- 
- 
+-- =============================================================================
+-- 普通 NPC 注册与更新
+-- =============================================================================
+-- 保留稳定版 Hook 和 UpdateMotion 路径；完成应用后命中 apply_once 快速路径。
 
- 
+-- 原生更新只登记或刷新 last_seen，不在此 Hook 内执行资源替换。
 local function register_character(character, source)
     if not character or scene_transition.active then
         return
@@ -120,7 +120,7 @@ local function apply_registered_armor_variants(now)
     end
 end
 
- 
+-- 就绪样本不能替代最终校验：重新取当前对象，再核对相同的骨骼签名。
 local function apply_ready_registered_entry(entry, ready_state)
     local pending_target = entry.pending_target
     local pending_body_id = entry.pending_body_id
@@ -132,9 +132,9 @@ local function apply_ready_registered_entry(entry, ready_state)
         return false
     end
 
-     
-     
-     
+    -- Final application never trusts the wrappers used by the preceding readiness frames.
+    -- Reacquire the character root, outfit carrier, candidate, Motion, CustomSkeleton and
+    -- holder, then require an exact signature match inside inspect_character().
     local root_ok, root_obj = safe_call(entry.character, "get_GameObject")
     if not root_ok or not root_obj then
         performance.game_object_failures = performance.game_object_failures + 1
@@ -187,7 +187,7 @@ local function apply_ready_registered_entry(entry, ready_state)
     return true
 end
 
- 
+-- 已应用目标和明确未命中目标均快速跳过；周期差分重同步默认关闭。
 local function update_registered()
     local now = normal_runtime_clock()
     local inspect_interval = tonumber(config.inspect_interval) or 1.0
