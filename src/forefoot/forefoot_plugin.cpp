@@ -244,7 +244,7 @@ struct ResourceSceneLock {
 };
 
 // Read-only compatibility check; original layers and resources are never edited.
-// Keep these extra witnesses local to this optional path, not the existing IK gate.
+// All extra helpers share the cached host contract; failure leaves ordinary takeover intact.
 int inspect_constraint(const Arguments& args) {
     if (!args.values[1] || args.values[2] || args.values[3] || args.values[4] || args.values[5])
         return constraint_reader::Invalid;
