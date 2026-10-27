@@ -4,7 +4,7 @@
  
 
 local MOD_NAME = "BoneSystemForNPC"
-local VERSION = "1.7.5"
+local VERSION = "1.7.6"
 local CONFIG_PATH = "BoneSystemForNPC/Config.json"
 local TARGETS_DIR = "BoneSystemForNPC/Targets"
 local TARGET_INDEX_PATH = "BoneSystemForNPC/TargetIndex.json"

@@ -10,7 +10,7 @@ if rawget(_G, "__BSFNStockBridgeAttempted") then
 end
 _G.__BSFNStockBridgeAttempted = true
 
-local report = { version = "1.7.5", status = "locating_original_closures",
+local report = { version = "1.7.6", status = "locating_original_closures",
     route = "stock_dll_private_state", registry_entries = 0, functions_checked = 0 }
 local function write_report()
     if json and json.dump_file then

@@ -32,7 +32,7 @@ _G.__BoneSystemForNPCStagedLoaded = true
  
 
 local MOD_NAME = "BoneSystemForNPC"
-local VERSION = "1.7.5"
+local VERSION = "1.7.6"
 local CONFIG_PATH = "BoneSystemForNPC/Config.json"
 local TARGETS_DIR = "BoneSystemForNPC/Targets"
 local TARGET_INDEX_PATH = "BoneSystemForNPC/TargetIndex.json"
@@ -4325,13 +4325,15 @@ end)()
  
  
  
+ 
 local nonhuman_forefoot = (function()
     local helper = {}
      
     local max_checks, interval = 20, 0.05
-    local native_apply, native_error, native_inspect
+    local native_apply, native_error, native_inspect, native_check
     local metrics = { prepared = 0, applied = 0, skipped = 0, errors = 0,
-        checks = 0, native_calls = 0, recent = {}, lifecycle = "initial_apply_only" }
+        checks = 0, native_calls = 0, native_checks = 0, carrier_scans = 0,
+        partial = 0, recent = {}, lifecycle = "initial_apply_only", scope = "equipment_parts" }
     performance.nonhuman_forefoot = metrics
 
     local function read(object, method, ...)
@@ -4356,13 +4358,14 @@ local nonhuman_forefoot = (function()
         return normalized(read(read(object, method), "get_ResourcePath"))
     end
 
-    local function record(entry, status, detail)
+    local function record(entry, status, detail, parts)
         entry.nonhuman_forefoot_pending = nil
-        entry.nonhuman_forefoot = { status = status, detail = tostring(detail or "") }
+        entry.nonhuman_forefoot = { status = status, detail = tostring(detail or ""), parts = parts }
         metrics.recent[#metrics.recent + 1] = { generation = scene_generation,
-            npc_id = entry.npc_id, status = status, detail = tostring(detail or "") }
+            npc_id = entry.npc_id, status = status, detail = tostring(detail or ""), parts = parts }
         if #metrics.recent > 16 then table.remove(metrics.recent, 1) end
         if status == "applied" then metrics.applied = metrics.applied + 1
+        elseif status == "partial" then metrics.partial = metrics.partial + 1
         elseif status == "error" then metrics.errors = metrics.errors + 1
         else metrics.skipped = metrics.skipped + 1 end
         bs_log("[NonhumanForefoot] " .. tostring(entry.npc_id) .. " " .. status .. " " .. tostring(detail))
@@ -4377,6 +4380,7 @@ local nonhuman_forefoot = (function()
             local path = "reframework/plugins/BSFNForefoot.dll"
             local probe = assert(package.loadlib(path, "bsfn_forefoot_probe"))
             assert(probe(0x42534638, 0, 0, 0, 0, 0, 0) == 8, "native argument ABI refused")
+            native_check = assert(package.loadlib(path, "bsfn_forefoot_inspect"))
             return assert(package.loadlib(path, "bsfn_forefoot_apply"))
         end)
         if not ok then native_error = tostring(result); return nil, native_error end
@@ -4400,51 +4404,53 @@ local nonhuman_forefoot = (function()
         metrics.prepared = metrics.prepared + 1
         return { root = root, motion = motion, skeleton = skeleton, body_id = body_id,
             desired = normalized(desired), profile = family.profile, generation = scene_generation,
-            dictionary = dictionary_generation, checks = 0, next_check = 0 }
+            dictionary = dictionary_generation, checks = 0, next_check = 0, completed = {} }
     end
 
     function helper.finish(plan, bone_ok, entry)
         if not plan or not bone_ok then return end
         entry.nonhuman_forefoot_pending = plan
-        entry.nonhuman_forefoot = { status = "pending", detail = "waiting for own BODY binding" }
+        entry.nonhuman_forefoot = { status = "pending", detail = "waiting for equipment bindings" }
     end
 
      
-    local function current_body(root_transform, body_id)
+     
+    local function current_parts(root_transform, body_id)
         local transform = read(root_transform, "get_Child")
-        local found, seen = nil, {}
+        local parts, seen, body_count = {}, {}, 0
         for _ = 1, 32 do
-            if not transform then return found end
+            if not transform then return body_count == 1 and parts or nil end
             local key = address(transform)
             if not key or seen[key] then return nil end
             seen[key] = true
             local object = read(transform, "get_GameObject")
-            if object and get_game_object_name(object) == body_id then
-                if found then return nil end
-                found = { object = object, transform = transform }
+            local name = object and get_game_object_name(object) or ""
+            if name == body_id then body_count = body_count + 1 end
+            if name == body_id or name:match("^ch0[23]_%d%d%d_%d%d%d[1-5]$") then
+                parts[#parts + 1] = { object = object, transform = transform, name = name }
             end
             transform = read(transform, "get_Next")
         end
-        return nil
+        return not transform and body_count == 1 and parts or nil
     end
 
      
      
      
-    local function body_components(object)
+    local function carrier_components(object)
         local custom = get_component(object, "via.motion.CustomSkeleton")
         if custom then
-            return "skipped", "BODY independent skeleton rebuild ordering not verified"
+            return "skipped", "independent skeleton rebuild ordering not verified"
         end
         local motion = get_component(object, "via.motion.Motion")
         if motion then
             if read(motion, "get_JointsConstructed") ~= true then
-                return "pending", "BODY joints not constructed"
+                return "pending", "joints not constructed"
             end
             local active = read(motion, "getActiveMotionBankCount")
             local dynamic = read(motion, "getDynamicMotionBankCount")
             if active ~= 0 or dynamic ~= 0 then
-                return "skipped", "BODY authored Motion ordering not verified"
+                return "skipped", "authored Motion ordering not verified"
             end
         end
         local constraints = get_component(object, "via.motion.JointConstraints")
@@ -4454,23 +4460,104 @@ local nonhuman_forefoot = (function()
         end
         local count = read(constraints, "getLayerCount")
         if type(count) ~= "number" or count % 1 ~= 0 or count < 0 or count > 16 then
-            return "skipped", "BODY constraint layer count unavailable"
+            return "skipped", "constraint layer count unavailable"
         end
         local unchecked_skin, empty_layers = false, 0
         for index = 0, count - 1 do
             local layer = read(constraints, "getLayer", index)
-            if not layer then return "pending", "BODY constraint layer not ready" end
+            if not layer then return "pending", "constraint layer not ready" end
             local pointer = address(layer)
-            if not pointer then return "skipped", "BODY constraint identity unavailable" end
+            if not pointer then return "skipped", "constraint identity unavailable" end
             local result = native_inspect(0x42534638, pointer, 0, 0, 0, 0, 0)
-            if result == 2 then return "pending", "BODY constraint resource/Scene not ready" end
-            if result == 30 then return "skipped", "BODY constraint writes foot; ordering not verified" end
+            if result == 2 then return "pending", "constraint resource/Scene not ready" end
+            if result == 30 then return "skipped", "constraint writes foot; ordering not verified" end
              
-            if result ~= 0 and result ~= 33 and result ~= 34 then return "skipped", "BODY constraint format not verified; native=" .. tostring(result) end
+            if result ~= 0 and result ~= 33 and result ~= 34 then return "skipped", "constraint format not verified; native=" .. tostring(result) end
             if result == 33 then unchecked_skin = true end
             if result == 34 then empty_layers = empty_layers + 1 end
         end
         return nil, nil, unchecked_skin, empty_layers
+    end
+
+     
+     
+    local function apply_part(plan, root, root_transform, part, apply)
+        local object, transform = part.object, part.transform
+        if not is_valid_managed_object(object) or read(transform, "get_SameJointsConstraint") ~= true
+            or not same_runtime_object(read(transform, "get_Parent"), root_transform) then
+            return "skipped", "equipment ownership/constraint changed"
+        end
+        local mesh = part.mesh
+        if not mesh or read(mesh, "get_MeshReady") ~= true then return "pending", "equipment Mesh not ready" end
+        if read(mesh, "get_HasJoint") == false then return "not_needed", "render mesh has no skeleton" end
+        local root_id, object_id, transform_id, mesh_id = address(root_transform), address(object), address(transform), address(mesh)
+        if not root_id or not object_id or not transform_id or not mesh_id then return "skipped", "native identity unavailable" end
+        metrics.native_checks = metrics.native_checks + 1
+        local checked = native_check(0x42534638, plan.root, root_id, object_id, transform_id, mesh_id, 0)
+        if checked == 2 then return "pending", "native Scene lock busy; throttled retry" end
+        if checked == 3 then return "not_needed", "render skeleton has no forefoot chain" end
+        if checked ~= 0 and checked ~= 1 then return "skipped", "native inspection guard=" .. tostring(checked) end
+        local status, detail, unchecked_skin, empty_layers = carrier_components(object)
+        if status then return status, detail end
+        metrics.native_calls = metrics.native_calls + 1
+        local result = apply(0x42534638, plan.root, root_id, object_id, transform_id, mesh_id, 0)
+        if address(root) ~= plan.root or address(object) ~= object_id or address(mesh) ~= mesh_id then
+            return "error", "identity changed across native call"
+        end
+        if result == 2 then return "pending", "native Scene lock busy; throttled retry" end
+        if result ~= 0 and result ~= 1 then return "skipped", "native guard=" .. tostring(result) end
+        return "applied", "own render skeleton forefoot mappings; native=" .. result
+            .. (unchecked_skin and "; SC_allowed_unverified" or "")
+            .. (empty_layers and empty_layers > 0 and "; empty_layers=" .. empty_layers or "")
+    end
+
+     
+     
+    local function update_parts(entry, plan, root, root_transform, apply)
+         
+        local core = get_component(root, "app.NpcCharacterCore")
+        local builder = read(core, "get_PartsBuilder")
+        local builder_id = address(builder)
+        if not builder_id or read(builder, "get_IsEnd") ~= true then
+            plan.completed = {}
+            return "pending", "equipment construction not finished"
+        end
+        if plan.builder ~= builder_id then plan.completed = {}; plan.builder = builder_id end
+        local parts = current_parts(root_transform, plan.body_id)
+        metrics.carrier_scans = metrics.carrier_scans + 1
+        if not parts then return "pending", "equipment children/Body identity not ready" end
+        local completed, rows = {}, {}
+        local applied, skipped, errors, waiting = 0, 0, 0, 0
+        for _, part in ipairs(parts) do
+            local object_id, transform_id = address(part.object), address(part.transform)
+            if not object_id or not transform_id then return "pending", "equipment identity not ready" end
+            part.mesh = get_component(part.object, "via.render.Mesh")
+            local key = tostring(object_id) .. ":" .. tostring(transform_id) .. ":" .. tostring(address(part.mesh)) .. ":" .. part.name
+            local row = plan.completed[key]
+            if not row then
+                local ok, status, detail = pcall(apply_part, plan, root, root_transform, part, apply)
+                if not ok then detail, status = tostring(status), "error" end
+                row = { name = part.name, status = status, detail = tostring(detail or "") }
+            end
+            rows[#rows + 1] = row
+            if row.status == "pending" then waiting = waiting + 1
+            else completed[key] = row end
+            if row.status == "applied" then applied = applied + 1
+            elseif row.status == "skipped" then skipped = skipped + 1
+            elseif row.status == "error" then errors = errors + 1 end
+        end
+        plan.completed = completed
+        entry.nonhuman_forefoot.parts = rows
+        if read(builder, "get_IsEnd") ~= true or address(read(core, "get_PartsBuilder")) ~= builder_id then
+            plan.completed = {}
+            return "pending", "equipment construction changed", rows
+        end
+        if waiting > 0 then
+            return "pending", "waiting for equipment render bindings; pending=" .. waiting, rows
+        end
+        local detail = "equipment render bindings; applied=" .. applied .. "; skipped=" .. skipped .. "; errors=" .. errors
+        if skipped + errors > 0 then return applied > 0 and "partial" or (errors > 0 and "error" or "skipped"), detail, rows end
+        return applied > 0 and "applied" or "not_needed", detail, rows
     end
 
     function helper.update(entry, now)
@@ -4478,7 +4565,7 @@ local nonhuman_forefoot = (function()
         if not nonhuman_retry.ready(plan, now) then return end
         plan.checks, plan.next_check = plan.checks + 1, now + interval
         metrics.checks = metrics.checks + 1
-        local ok, status, detail = pcall(function()
+        local ok, status, detail, parts = pcall(function()
             if not config.enabled or config.mode ~= "api_fix_bone" or config.auto_apply_bone == false
                 or scene_transition.active or normal_runtime_menu_suspended or entry.player_character_rejected
                 or scene_generation ~= plan.generation or entry.scene_generation ~= plan.generation
@@ -4508,40 +4595,14 @@ local nonhuman_forefoot = (function()
             local apply, why = get_native()
             if not apply then return "skipped", why end
             local root_transform = get_transform(root)
-            local body = current_body(root_transform, plan.body_id)
-            if not body then return "pending", "unique direct BODY not ready" end
-            local object, transform = body.object, body.transform
-            if not is_valid_managed_object(object) or read(transform, "get_SameJointsConstraint") ~= true
-                or not same_runtime_object(read(transform, "get_Parent"), root_transform) then
-                return "skipped", "BODY ownership/constraint changed"
-            end
-            local mesh = get_component(object, "via.render.Mesh")
-            if not mesh then return "pending", "BODY Mesh not ready" end
-            local component_status, component_detail, unchecked_skin, empty_layers = body_components(object)
-            if component_status then return component_status, component_detail end
-            local root_id, body_id, transform_id, mesh_id = address(root_transform), address(object), address(transform), address(mesh)
-            if not root_id or not body_id or not transform_id or not mesh_id then return "skipped", "native identity unavailable" end
-            metrics.native_calls = metrics.native_calls + 1
-            local result = apply(0x42534638, plan.root, root_id, body_id, transform_id, mesh_id, 0)
-             
-            if address(root) ~= plan.root or address(object) ~= body_id or address(mesh) ~= mesh_id then
-                return "error", "identity changed across native call"
-            end
-            if result == 2 then return "pending", "native Scene lock busy; throttled retry" end
-            if result ~= 0 and result ~= 1 then return "skipped", "native guard=" .. tostring(result) end
-            local secondary = get_component(object, "via.motion.ChildSecondary")
-            return "applied", "BODY-only four mappings; initial_apply_only; native=" .. result
-                .. "; merged=" .. tostring(read(secondary, "get_MergedSkeleton"))
-                .. "; control_parent=" .. tostring(read(secondary, "get_ControlParentObject"))
-                .. (unchecked_skin and "; SC_allowed_unverified" or "")
-                .. (empty_layers and empty_layers > 0 and "; empty_layers=" .. empty_layers or "")
+            return update_parts(entry, plan, root, root_transform, apply)
         end)
         if not ok then detail, status = tostring(status), "error" end
         if status == "pending" then
             nonhuman_retry.defer(plan, entry.nonhuman_forefoot, detail, now, max_checks, plan.checks)
             return
         end
-        record(entry, status, detail)
+        record(entry, status, detail, parts)
     end
     return helper
 end)()
@@ -5729,7 +5790,8 @@ local function install_quest_result_hooks()
     local report_key = "quest_result"
     local quest = { calls = 0, attempts = 0, succeeded = 0, errors = 0, face_attempts = 0, hide_attempts = 0,
         recent_results = {},
-        face_traces = {}, trace_samples = 0, trace_errors = 0, face_relays = {}, relay_errors = 0 }
+        face_traces = {}, trace_samples = 0, trace_errors = 0, face_relays = {}, relay_errors = 0,
+        face_visibility = {}, visibility_errors = 0 }
     performance[report_key] = quest
 
     local function field(object, name)
@@ -5804,6 +5866,152 @@ local function install_quest_result_hooks()
     end
 
     local face_relay = make_quest_face_relay(field, call, edit_root_for, quest)
+
+    local function stop_face_visibility(state, reason)
+        state.visibility_enabled = nil
+        if state.face_visibility then state.face_visibility.status = reason end
+    end
+
+     
+    local function visibility_component(object, name)
+        local rt = assert(get_runtime_type(name), "visibility component type unavailable")
+        local ok, component = safe_call(object, "getComponent(System.Type)", rt)
+        assert(ok, "visibility component access failed")
+        return component
+    end
+
+     
+     
+    local function arm_face_visibility(state, data, root, face, bind_hash)
+        if state.face_visibility or data.Enable == false or data.HideFace ~= true then return end
+        local info = { action = state.key, generation = state.generation, started = os.clock(),
+            root_address = quest_object_address(root), face_address = quest_object_address(face),
+            face_name = get_game_object_name_quiet(face), checks = 0, material_reads = 0,
+            material_writes = 0, repairs = 0, face_changes = 0, mesh_changes = 0,
+            status = "waiting for visibility readback" }
+        state.face_visibility = info
+        quest.face_visibility[#quest.face_visibility + 1] = info
+        if #quest.face_visibility > 8 then table.remove(quest.face_visibility, 1) end
+        if not info.root_address or not info.face_address or not info.face_name or info.face_name == "" then
+            stop_face_visibility(state, "face identity unavailable")
+            return
+        end
+        state.visibility_bind_hash, state.visibility_enabled = bind_hash, true
+        state.next_visibility_probe = nil
+    end
+
+     
+     
+    local function maintain_face_visibility(action, state)
+        if not state.visibility_enabled then return end
+        if not config.enabled or config.auto_apply_face_mapping == false
+            or scene_transition.active or state.generation ~= scene_generation then
+            stop_face_visibility(state, "visibility suspended by lifecycle")
+            return
+        end
+        local now, info = os.clock(), state.face_visibility
+        if now - info.started > 60 or info.checks >= 320 then
+            stop_face_visibility(state, "visibility action budget ended")
+            return
+        end
+        if state.next_visibility_probe and now < state.next_visibility_probe then return end
+        state.next_visibility_probe = now + 0.2
+        info.checks, info.last_check = info.checks + 1, now
+        local phase, mot_phase = tonumber(field(action, "_Phase")), tonumber(field(action, "_MotPhase"))
+        if phase ~= 1 and phase ~= 2 and phase ~= 3 then
+            stop_face_visibility(state, "visibility result phase ended")
+            return
+        end
+        if mot_phase == 0 then info.status = "waiting for native motion setup"; return end
+        if mot_phase ~= 1 and mot_phase ~= 2 then
+            stop_face_visibility(state, "visibility motion phase unsupported")
+            return
+        end
+        local motion, creator = field(action, "_NpcMotionComponent"), field(action, "_NpcVisualCreator")
+        local owner = motion and get_game_object_quiet(motion)
+        local player = field(action, "_Chara")
+        if quest_object_address(action) ~= state.key or quest_object_address(owner) ~= state.owner_address
+            or quest_object_address(motion) ~= state.motion_address
+            or not same_runtime_object(owner, get_game_object_quiet(creator))
+            or visibility_component(owner, "app.HunterCharacter")
+            or (player and same_runtime_object(owner, get_game_object_quiet(player))) then
+            stop_face_visibility(state, "visibility owner changed or player rejected")
+            return
+        end
+        if call(motion, "get_JointsConstructed") ~= true then
+            info.status = "waiting for constructed NPC joints"
+            return
+        end
+        local root = visibility_component(owner, "app.CharacterEditRegionRoot")
+        if not root then
+            local region = visibility_component(owner, "app.CharacterEditRegion")
+            root = region and call(region, "getRoot")
+        end
+        if quest_object_address(root) ~= info.root_address then
+            stop_face_visibility(state, "visibility region root changed")
+            return
+        end
+        local face = call(root, "getPartsObject", 935285574)
+        if not face then info.status = "waiting for current Face slot"; return end
+        local face_address = quest_object_address(face)
+        local chest = call(root, "getPartsObject", 3471977595)
+        local bind_part = state.visibility_bind_hash == 3471977595 and chest
+            or (state.visibility_bind_hash and call(root, "getPartsObject", state.visibility_bind_hash))
+        if not face_address or same_runtime_object(face, owner) or same_runtime_object(face, chest)
+            or same_runtime_object(face, bind_part) then
+            stop_face_visibility(state, "visibility Face aliases owner or outfit")
+            return
+        end
+         
+        if face_address ~= info.face_address then
+            if get_game_object_name_quiet(face) ~= info.face_name then
+                stop_face_visibility(state, "visibility Face replacement not recognized")
+                return
+            end
+            info.face_changes, info.face_address = info.face_changes + 1, face_address
+        end
+        local mesh = visibility_component(face, "via.render.Mesh")
+        local mesh_address = quest_object_address(mesh)
+        local count = mesh and tonumber(call(mesh, "get_MaterialNum"))
+        if not mesh_address or not count or count == 0 then info.status = "waiting for Face materials"; return end
+        if count < 0 or count > 128 or count % 1 ~= 0 then
+            stop_face_visibility(state, "visibility material count unsupported")
+            return
+        end
+        if info.mesh_address and info.mesh_address ~= mesh_address then info.mesh_changes = info.mesh_changes + 1 end
+        info.mesh_address, info.material_count = mesh_address, count
+        local visible, remaining = 0, 0
+        for index = 0, count - 1 do
+            local enabled = call(mesh, "getMaterialsEnable", index)
+            info.material_reads = info.material_reads + 1
+            assert(type(enabled) == "boolean", "Face visibility read unavailable")
+            if enabled then
+                visible = visible + 1
+                local ok, message = call_any(mesh, "setMaterialsEnable", index, false)
+                assert(ok, tostring(message))
+                info.material_writes = info.material_writes + 1
+                local after = call(mesh, "getMaterialsEnable", index)
+                info.material_reads = info.material_reads + 1
+                assert(type(after) == "boolean", "Face visibility readback unavailable")
+                if after then remaining = remaining + 1 end
+            end
+        end
+        info.last_before_visible, info.last_after_visible = visible, remaining
+        if visible > 0 then
+            info.repairs, info.last_repair = info.repairs + 1, now
+            info.repair_before_visible, info.repair_after_visible = visible, remaining
+        end
+        info.status = remaining == 0 and "native Face materials verified hidden" or "Face write did not persist; retry pending"
+    end
+
+    local function check_face_visibility(action, state)
+        local ok, message = pcall(maintain_face_visibility, action, state)
+        if not ok then
+            quest.visibility_errors = quest.visibility_errors + 1
+            state.face_visibility.error = tostring(message)
+            stop_face_visibility(state, "visibility access failed; no stale-object retry")
+        end
+    end
 
      
      
@@ -6042,6 +6250,7 @@ local function install_quest_result_hooks()
                 if states[oldest] then
                     stop_face_trace(states[oldest], "state budget evicted")
                     face_relay.stop(states[oldest], "state budget evicted")
+                    stop_face_visibility(states[oldest], "state budget evicted")
                     states[oldest].face_data = nil
                     states[oldest].face_status = "state budget evicted"
                     remember(states[oldest], "state budget evicted")
@@ -6162,6 +6371,7 @@ local function install_quest_result_hooks()
         if state and state.generation ~= scene_generation then
             stop_face_trace(state, "scene generation changed")
             face_relay.stop(state, "scene generation changed")
+            stop_face_visibility(state, "scene generation changed")
             state.face_data = nil
             state.face_status = "scene generation changed; face wait cancelled"
             remember(state, state.status)
@@ -6177,7 +6387,7 @@ local function install_quest_result_hooks()
                 state.settled = snapshot(action, field(action, "_NpcMotionComponent"))
                 remember(state, "settled readback; " .. state.status)
             end
-            if state.face_data or state.trace_pending or state.relay_enabled then return state end
+            if state.face_data or state.trace_pending or state.relay_enabled or state.visibility_enabled then return state end
             return
         end
         state = state or new_state(key)
@@ -6204,7 +6414,7 @@ local function install_quest_result_hooks()
     end
 
      
-    local function hide_ready_face(owner, state)
+    local function hide_ready_face(owner, state, root, face, bind_hash)
         local data = state.face_data
         if state.hide_attempts or data.Enable == false or data.HideFace ~= true then return end
         local hide_data = {}
@@ -6215,6 +6425,7 @@ local function install_quest_result_hooks()
         local ok, message = pcall(API.fix_bone, owner, hide_data, nil)
         state.hide_status = ok and "hide-only API returned; binding still pending" or tostring(message)
         if not ok then quest.errors = quest.errors + 1 end
+        if ok then arm_face_visibility(state, data, root, face, bind_hash) end
         remember(state, state.status)
     end
 
@@ -6295,7 +6506,7 @@ local function install_quest_result_hooks()
         local bind_hash = bind_hashes[tonumber(face_data.BindPart) or 1]
         local bind_part = bind_hash and call(edit_root, "getPartsObject", bind_hash)
         if not chest or (face_data.BindFace == true and not bind_part) then
-            hide_ready_face(owner, state)
+            hide_ready_face(owner, state, edit_root, face, bind_hash)
             face_status(state, "waiting for stock BoneSystem Chest/bind slot", false)
             return
         end
@@ -6303,7 +6514,7 @@ local function install_quest_result_hooks()
             local bind_motion = get_component(bind_part, "via.motion.Motion")
                 or get_component(bind_part, "via.motion.ChildSecondary")
             if not bind_motion then
-                hide_ready_face(owner, state)
+                hide_ready_face(owner, state, edit_root, face, bind_hash)
                 face_status(state, "waiting for stock BoneSystem binding Motion/ChildSecondary", false)
                 return
             end
@@ -6331,6 +6542,10 @@ local function install_quest_result_hooks()
         local ok, message = pcall(API.fix_bone, owner, face_data, nil)
         state.face_status = ok and "face-only API returned; check material readback" or tostring(message)
         if not ok then quest.errors = quest.errors + 1 end
+        if ok then
+            arm_face_visibility(state, face_data, edit_root, face, bind_hash)
+            state.next_visibility_probe = nil
+        end
         if ok and face_data.Enable ~= false and face_data.BindFace == true and face_relay.available then
             face_relay.arm(state, face, bind_part, bind_hash)
         end
@@ -6351,6 +6566,7 @@ local function install_quest_result_hooks()
         state.finished = true
         state.face_data = nil
         face_relay.stop(state, "result callback failed")
+        stop_face_visibility(state, "result callback failed")
         stop_face_trace(state, "result callback failed")
         state.sample_next, state.sample_settled_at = nil, nil
         remember(state, "caught error: " .. tostring(message))
@@ -6391,6 +6607,7 @@ local function install_quest_result_hooks()
                         for _, state in pairs(states) do
                             stop_face_trace(state, "result suspended")
                             face_relay.stop(state, "result suspended")
+                            stop_face_visibility(state, "result suspended")
                             if state.face_data then
                                 face_status(state, "result suspended; face wait cancelled", true)
                             end
@@ -6420,6 +6637,7 @@ local function install_quest_result_hooks()
                         state.face_data = nil
                         state.sample_next, state.sample_settled_at = nil, nil
                         face_relay.stop(state, "native update ended")
+                        stop_face_visibility(state, "native update ended")
                         stop_face_trace(state, "native update ended")
                         remember(state, "native update returned END; " .. tostring(state.status))
                         return retval
@@ -6428,6 +6646,7 @@ local function install_quest_result_hooks()
                         local ok, message = pcall(finish_face, action, state)
                         if not ok then record_error(action, message) end
                         if ok then
+                            check_face_visibility(action, state)
                             face_relay.queue(state)
                             local sampled, sample_error = pcall(sample_face_trace, action, state, "after_native_update")
                             if not sampled then
@@ -6439,6 +6658,7 @@ local function install_quest_result_hooks()
                     else
                         face_status(state, "result suspended in original callback", true)
                         face_relay.stop(state, "result suspended in original callback")
+                        stop_face_visibility(state, "result suspended in original callback")
                         stop_face_trace(state, "result suspended in original callback")
                     end
                 end
@@ -6454,6 +6674,7 @@ local function install_quest_result_hooks()
                     if state.face_data then state.face_status = "action exited before face completion" end
                     state.face_data = nil
                     face_relay.stop(state, "action exited")
+                    stop_face_visibility(state, "action exited")
                     stop_face_trace(state, "action exited")
                     remember(state, "action exited; " .. tostring(state.status))
                     states[key] = nil
