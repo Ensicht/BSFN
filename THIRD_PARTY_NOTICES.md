@@ -1,5 +1,9 @@
 # Third-party Notices
 
+License paths in this document describe the source tree. In the binary release,
+this notice and the third-party license files are together in `licenses/`;
+the project `LICENSE` remains beside the installable ZIP.
+
 BoneSystemForNPC's own source code is licensed under MIT, Copyright (c) 2026 Laz.
 The project license does not relicense third-party software or game assets.
 

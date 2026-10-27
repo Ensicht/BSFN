@@ -10,9 +10,13 @@ import zipfile
 from assemble import assemble, ROOT
 
 PINKY = "natives/STM/BoneSystemForNPC/Constraints/WyverianPinky_DSG.jcns.102"
-LICENSES = ("LICENSE", "THIRD_PARTY_NOTICES.md", "docs/licenses/ArmorVariantManager.txt",
-            "docs/licenses/LLVM-MinGW.txt", "docs/licenses/MinGW-w64.txt",
-            "docs/licenses/MinGW-w64-runtime.txt", "docs/licenses/winpthreads.txt")
+LICENSES = {
+    "LICENSE": "LICENSE",
+    "licenses/THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
+    **{"licenses/" + name: "docs/licenses/" + name for name in (
+        "ArmorVariantManager.txt", "LLVM-MinGW.txt", "MinGW-w64.txt",
+        "MinGW-w64-runtime.txt", "winpthreads.txt")},
+}
 
 
 def digest(data):
@@ -39,7 +43,7 @@ def build(compiler):
     run([compiler, *flags, "-shared", ROOT / "src/bridge/bridge.cpp", "-lbcrypt", "-o", bridge])
     run([compiler, *flags, "-I", ROOT / "src/forefoot", "-shared",
          ROOT / "src/forefoot/forefoot_plugin.cpp", "-o", foot])
-    notices = {name: (ROOT / name).read_bytes() for name in LICENSES}
+    notices = {name: (ROOT / source).read_bytes() for name, source in LICENSES.items()}
     files = {name: (ROOT / name).read_bytes() for name in ("README.md",
              "reframework/autorun/BSNPC.lua", "reframework/autorun/BSFNStockBridge/bootstrap.lua")}
     files["reframework/plugins/BSFNStockBridge.dll"] = bridge.read_bytes()
