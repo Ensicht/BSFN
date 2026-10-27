@@ -1,7 +1,7 @@
 {
   "name": "BoneSystemForNPC",
   "bundle": "BSFN",
-  "version": "1.7.5",
+  "version": "1.7.6",
   "author": "Laz",
   "pinky_asset_sha256": "7c118a37fd3ad089308c7139a0c62bade10da46913d19acfbe9018b76b4f8fc9",
   "stock_bonesystem_version": "26.2.10.2",

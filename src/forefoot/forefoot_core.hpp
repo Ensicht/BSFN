@@ -6,7 +6,7 @@
 
 namespace forefoot {
 using Address = uintptr_t;
-enum Status { Applied = 0, Already = 1, Busy = 2, BadArguments = -1,
+enum Status { Applied = 0, Already = 1, Busy = 2, NoForefoot = 3, BadArguments = -1,
     UnsupportedHost = -2, BadOwner = -3, BadSkeleton = -4, BadChain = -5,
     BadMapping = -6, BadPose = -7, BadJoint = -8, MissingContext = -9 };
 constexpr std::array<uint32_t, 6> hashes = {
@@ -16,7 +16,7 @@ struct Request { Address root_object, root, body_object, body, mesh; };
 // 原生四元数 setter 使用对齐的 SIMD 读取，三个输入块均保留 16 字节对齐。
 struct alignas(16) Pose { float position[4]{}, rotation[4]{}, scale[4]{}; };
 struct Patch { Address joint, map; Pose bind; };
-struct Plan { std::array<Patch, 4> patches{}; bool already = false; };
+struct Plan { std::array<Patch, 4> patches{}; unsigned count{}; bool already = false; };
 
 template<class T> T value(Address p, size_t offset = 0) {
     T v{};
@@ -84,13 +84,21 @@ Status prepare(Memory& memory, const Request& r, Plan& plan) {
                 ids[k] = static_cast<int>(n);
             }
         }
-        for (int id : ids) if (id < 0) return BadChain;
-        for (unsigned side : {0u, 3u})
-            if (value<int16_t>(bind, ids[side+1]*64+12) != ids[side] ||
-                value<int16_t>(bind, ids[side+2]*64+12) != ids[side+1]) return BadChain;
+        // Render carriers may omit Toe or an entire side. Existing descendants
+        // still require their real parents; the character's IK chain stays complete.
+        if (!which) for (int id : ids) if (id < 0) return BadChain;
+        for (unsigned side : {0u, 3u}) {
+            if (ids[side+1] >= 0 && (ids[side] < 0 ||
+                value<int16_t>(bind, ids[side+1]*64+12) != ids[side])) return BadChain;
+            if (ids[side+2] >= 0 && (ids[side+1] < 0 ||
+                value<int16_t>(bind, ids[side+2]*64+12) != ids[side+1])) return BadChain;
+        }
     }
+    unsigned target_count = 0;
+    for (auto k : targets) target_count += bi[k] >= 0;
+    if (!target_count) return NoForefoot;
     for (unsigned foot : {0u, 3u})
-        if (value<int16_t>(map, bi[foot]*2) != ri[foot]) return BadMapping;
+        if (bi[foot] >= 0 && value<int16_t>(map, bi[foot]*2) != ri[foot]) return BadMapping;
     const Address list = value<Address>(bs, 0x68);
     if (!memory.range(list, 0x20, false) || value<uint32_t>(list, 0x1c) != bn ||
         !memory.range(list+0x20, bn*8, false)) return BadJoint;
@@ -113,10 +121,11 @@ Status prepare(Memory& memory, const Request& r, Plan& plan) {
     bool locals_equal = true;
     for (unsigned p = 0; p < targets.size(); ++p) {
         const auto k = targets[p];
+        if (bi[k] < 0) continue;
         const int mapped = value<int16_t>(map, bi[k]*2);
         if (mapped == -1) ++detached;
         else if (mapped != ri[k]) return BadMapping;
-        auto& patch = plan.patches[p];
+        auto& patch = plan.patches[plan.count++];
         patch.map = map + bi[k]*2;
         patch.joint = value<Address>(list, 0x20 + bi[k]*8);
         if (!memory.range(patch.joint, 0x20, false) || value<Address>(patch.joint, 0x10) != bs ||
@@ -133,8 +142,8 @@ Status prepare(Memory& memory, const Request& r, Plan& plan) {
         locals_equal = locals_equal && same_pose(current, patch.bind);
     }
     // 不接管别人已经解除的部分绑定，也不逐帧修复外部写入者。
-    if (detached && (detached != 4 || !locals_equal)) return BadMapping;
-    plan.already = detached == 4;
+    if (detached && (detached != target_count || !locals_equal)) return BadMapping;
+    plan.already = detached == target_count;
     return plan.already ? Already : Applied;
 }
 
@@ -142,12 +151,14 @@ Status prepare(Memory& memory, const Request& r, Plan& plan) {
 template<class Setters>
 Status commit(const Plan& plan, Setters& setters) {
     if (plan.already) return Already;
-    for (const auto& patch : plan.patches) {
+    for (unsigned i = 0; i < plan.count; ++i) {
+        const auto& patch = plan.patches[i];
         setters.position(patch.joint, patch.bind.position);
         setters.rotation(patch.joint, patch.bind.rotation);
         setters.scale(patch.joint, patch.bind.scale);
     }
-    for (const auto& patch : plan.patches) {
+    for (unsigned i = 0; i < plan.count; ++i) {
+        const auto& patch = plan.patches[i];
         const int16_t detached = -1;
         std::memcpy(reinterpret_cast<void*>(patch.map), &detached, sizeof(detached));
     }

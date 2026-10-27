@@ -5,8 +5,8 @@
 #include <limits>
 #include <reframework/API.h>
 #include "forefoot_core.hpp"
-#include "host_signature.hpp"
 #include "host_layout.hpp"
+#include "host_resolver.hpp"
 #include "resource_helper.hpp"
 #include "constraint_reader.hpp"
 
@@ -17,6 +17,7 @@ using Setter = void (*)(void*, void*, const float*);
 std::array<Setter, 3> setters{};
 uintptr_t game_base = 0;
 int host_state = 0;
+host_resolver::Resolution resolved_host{};
 
 struct Memory {
     bool range(uintptr_t p, size_t n, bool write) const {
@@ -132,49 +133,59 @@ struct ImageContract {
     }
 };
 
-// 首次使用只核验固定范围的接口/布局证据，成功与失败均缓存，不新增帧扫描。
+// 首次使用解析 SDK 入口及关联的接口/布局证据，成功与失败均缓存，不新增帧扫描。
 // UpdateTransform 仅检查 REFramework 未挂钩的内部窗口；不调用或覆盖它。
 bool supported_host() {
     if (host_state) return host_state > 0;
     if (!host) return false;
     if (!host->sdk || !host->sdk->functions || !host->sdk->tdb || !host->sdk->method ||
         !host->sdk->functions->get_tdb || !host->sdk->functions->get_vm_context ||
-        !host->sdk->tdb->find_method || !host->sdk->method->get_function)
+        !host->sdk->tdb->find_method || !host->sdk->tdb->find_type || !host->sdk->method->get_function ||
+        !host->sdk->method->get_return_type || !host->sdk->method->get_num_params || !host->sdk->method->get_params)
         return reject_host("SDK interface unavailable");
     host_state = -1;
     game_base = reinterpret_cast<uintptr_t>(GetModuleHandleW(L"MonsterHunterWilds.exe"));
     Memory m;
     ImageContract image;
     if (!image.read(m)) return reject_host("invalid x64 PE structure");
-    for (const auto& sig : host_signature::anchors)
-        if (!image.range(m, sig.rva, sig.bytes.size(), true) ||
-            std::memcmp(reinterpret_cast<void*>(game_base+sig.rva), sig.bytes.data(), sig.bytes.size()))
-            return reject_host("code window mismatch", sig.rva);
-    for (const auto& sig : host_layout::witnesses)
-        if (!image.range(m, sig.rva, sig.bytes.size(), true) ||
-            std::memcmp(reinterpret_cast<void*>(game_base+sig.rva), sig.bytes.data(), sig.bytes.size()))
-            return reject_host("native layout witness mismatch", sig.rva);
-    if (!image.range(m, host_layout::scene_slot, sizeof(uintptr_t), false))
-        return reject_host("scene slot outside data section");
+    const auto tdb = host->sdk->functions->get_tdb();
+    if (!tdb) return reject_host("TDB unavailable");
+    const char* names[] = {"set_LocalPosition", "set_LocalRotation", "set_LocalScale",
+                           "get_ConstraintJoint", "get_OutputTargetCount", "get_CurrentScene"};
+    const char* parameters[] = {"via.vec3", "via.Quaternion", "via.vec3"};
+    std::array<uintptr_t, 6> typed{};
+    for (unsigned i = 0; i < typed.size(); ++i) {
+        auto method = host->sdk->tdb->find_method(tdb,
+            i == 5 ? "via.SceneManager" : i == 4 ? "via.motion.JointConstraintsLayer" : "via.Joint", names[i]);
+        if (!method) return reject_host("Joint setter method missing", i);
+        const auto expected_return = host->sdk->tdb->find_type(tdb,
+            i < 3 ? "System.Void" : i == 3 ? "via.Joint" : i == 4 ? "System.Int32" : "via.Scene");
+        if (!expected_return || host->sdk->method->get_return_type(method) != expected_return ||
+            host->sdk->method->get_num_params(method) != (i < 3 ? 1u : 0u))
+            return reject_host("typed method signature mismatch", i);
+        if (i < 3) {
+            REFrameworkMethodParameter parameter{};
+            uint32_t count = 0;
+            if (host->sdk->method->get_params(method, &parameter, sizeof(parameter), &count) != REFRAMEWORK_ERROR_NONE ||
+                count != 1 || parameter.t != host->sdk->tdb->find_type(tdb, parameters[i]))
+                return reject_host("Joint setter parameter mismatch", i);
+        }
+        auto fn = host->sdk->method->get_function(method);
+        const auto address = reinterpret_cast<uintptr_t>(fn);
+        if (address < game_base || !image.range(m, address - game_base, 8, true))
+            return reject_host("typed method outside executable image", i);
+        typed[i] = address - game_base;
+        if (i < setters.size()) setters[i] = reinterpret_cast<Setter>(fn);
+    }
+    host_resolver::Resolver<ImageContract, Memory> resolver(game_base, image, m);
+    if (!resolver.run(typed, resolved_host)) return reject_host("native structure unresolved or ambiguous; stage", resolver.stage);
     const auto kernel = GetModuleHandleW(L"kernel32.dll");
-    const uintptr_t imports[] = {host_layout::enter_iat, host_layout::leave_iat};
+    const uintptr_t imports[] = {resolved_host.enter_iat, resolved_host.leave_iat};
     const char* import_names[] = {"EnterCriticalSection", "LeaveCriticalSection"};
     for (unsigned i = 0; i < 2; ++i) {
         const auto expected = kernel ? GetProcAddress(kernel, import_names[i]) : nullptr;
-        if (!expected || !image.range(m, imports[i], sizeof(uintptr_t), false) ||
-            forefoot::value<uintptr_t>(game_base + imports[i]) != reinterpret_cast<uintptr_t>(expected))
+        if (!expected || forefoot::value<uintptr_t>(game_base + imports[i]) != reinterpret_cast<uintptr_t>(expected))
             return reject_host("scene lock import mismatch", imports[i]);
-    }
-    const auto tdb = host->sdk->functions->get_tdb();
-    if (!tdb) return reject_host("TDB unavailable");
-    const char* names[] = {"set_LocalPosition", "set_LocalRotation", "set_LocalScale"};
-    const uintptr_t rvas[] = {0x0c294e60, 0x0c295130, 0x0c2951d0};
-    for (unsigned i = 0; i < 3; ++i) {
-        auto method = host->sdk->tdb->find_method(tdb, "via.Joint", names[i]);
-        if (!method) return reject_host("Joint setter method missing", i);
-        auto fn = host->sdk->method->get_function(method);
-        if (reinterpret_cast<uintptr_t>(fn) != game_base+rvas[i]) return reject_host("Joint setter address mismatch", i);
-        setters[i] = reinterpret_cast<Setter>(fn);
     }
     host_state = 1;
     return true;
@@ -193,10 +204,10 @@ struct NativeSetters {
     void scale(uintptr_t joint, const float* data) { setters[2](context, reinterpret_cast<void*>(joint), data); }
 };
 
-int apply(const Arguments& args) {
+int apply(const Arguments& args, bool inspect_only = false) {
     if (!supported_host()) return forefoot::UnsupportedHost;
     Memory memory;
-    const auto slot = game_base+host_layout::scene_slot;
+    const auto slot = game_base+resolved_host.scene_slot;
     if (!memory.range(slot, sizeof(uintptr_t), false)) return forefoot::UnsupportedHost;
     const auto scene = forefoot::value<uintptr_t>(slot);
     if (!scene || scene > std::numeric_limits<uintptr_t>::max() - host_layout::scene_lock ||
@@ -209,7 +220,7 @@ int apply(const Arguments& args) {
     const forefoot::Request request{args.values[1], args.values[2], args.values[3], args.values[4], args.values[5]};
     forefoot::Plan plan;
     auto status = forefoot::prepare(memory, request, plan);
-    if (status != forefoot::Applied) return status;
+    if (status != forefoot::Applied || inspect_only) return status;
     NativeSetters native{context};
     return forefoot::commit(plan, native);
 }
@@ -218,7 +229,7 @@ struct ResourceSceneLock {
     CRITICAL_SECTION* lock = nullptr;
     bool held = false;
     ResourceSceneLock(const Memory& memory, uintptr_t expected_scene) {
-        const auto slot = game_base + host_layout::scene_slot;
+        const auto slot = game_base + resolved_host.scene_slot;
         if (!memory.range(slot, sizeof(uintptr_t), false)) return;
         const auto scene = forefoot::value<uintptr_t>(slot);
         // Compare the scalar before touching a possibly retired scene's critical section.
@@ -239,29 +250,6 @@ int inspect_constraint(const Arguments& args) {
         return constraint_reader::Invalid;
     if (!supported_host() || !bsfn_resource::available(host->sdk)) return forefoot::UnsupportedHost;
     Memory memory;
-    static int verified = 0;
-    if (!verified) {
-        verified = -1;
-        ImageContract image;
-        const std::array<host_layout::Witness, 4> witnesses = {{
-            // Native update: owner, assigned asset, then resource readiness.
-            {0x6389f, std::string_view("\x48\x83\x79\x10\x00\x0f\x84\xaa\x06\x00\x00\x48\x89\xce\x48\x8b\x49\x20\x48\x85\xc9\x0f\x84\x9a\x06\x00\x00\x80\x79\x39\x00\x75\x0d\xe8\xbb\xeb\xfa\xff\x84\xc0\x0f\x84\x87\x06\x00\x00", 46)},
-            {0xc3d7930, std::string_view("\x48\x89\xd1\xe9\xb8\x6d\xa3\x00", 8)},
-            {0xce0e6f0, std::string_view("\x48\x83\xec\x28\x48\x83\xc1\x20\xe8\x93\xb6\x81\xfd\x48\x85\xc0\x74\x0c\x0f\xb7\x80\x88\x00\x00\x00", 25)},
-            {0xa629d90, std::string_view("\x56\x48\x83\xec\x20\x48\x89\xce\x48\x8b\x09\x48\x85\xc9\x74\x41\x80\x79\x39\x00\x75\x0c\xe8\xd5\x86\x9e\xf5\x84\xc0\x74\x32\x48\x8b\x0e\x48\x8b\x41\x60\x48\x8d\x48\x10\x48\x85\xc0\x48\x0f\x44\xc8\x8b\x51\x18", 52)}
-        }};
-        if (!image.read(memory)) return forefoot::UnsupportedHost;
-        for (const auto& witness : witnesses)
-            if (!image.range(memory, witness.rva, witness.bytes.size(), true) ||
-                std::memcmp(reinterpret_cast<void*>(game_base + witness.rva), witness.bytes.data(), witness.bytes.size()))
-                return forefoot::UnsupportedHost;
-        const auto tdb = host->sdk->functions->get_tdb();
-        auto method = host->sdk->tdb->find_method(tdb, "via.motion.JointConstraintsLayer", "get_OutputTargetCount");
-        if (!method || reinterpret_cast<uintptr_t>(host->sdk->method->get_function(method)) != game_base + 0xc3d7930)
-            return forefoot::UnsupportedHost;
-        verified = 1;
-    }
-    if (verified < 0) return forefoot::UnsupportedHost;
     const auto object = reinterpret_cast<bsfn_resource::Object>(args.values[1]);
     if (!memory.range(args.values[1], 0x28, false) || !host->sdk->managed_object->is_managed_object(object))
         return constraint_reader::Invalid;
@@ -272,7 +260,7 @@ int inspect_constraint(const Arguments& args) {
     bsfn_resource::References references{host->sdk};
     bsfn_resource::Pin<bsfn_resource::Object> pin(references);
     pin.acquire(object);
-    const auto slot = game_base + host_layout::scene_slot;
+    const auto slot = game_base + resolved_host.scene_slot;
     if (!memory.range(slot, sizeof(uintptr_t), false)) return forefoot::UnsupportedHost;
     ResourceSceneLock guard(memory, forefoot::value<uintptr_t>(slot));
     return guard.held ? constraint_reader::layer(memory, args.values[1]) : constraint_reader::Pending;
@@ -285,7 +273,7 @@ int apply_resource_impl(const Arguments& args, bool fingers, bsfn_resource::Diag
     if (!supported_host()) return bsfn_resource::UnsupportedHost;
     if (!bsfn_resource::available(host->sdk)) return bsfn_resource::MissingApi;
     Memory memory;
-    const auto slot = game_base + host_layout::scene_slot;
+    const auto slot = game_base + resolved_host.scene_slot;
     if (!memory.range(slot, sizeof(uintptr_t), false)) return bsfn_resource::UnsupportedHost;
     const auto expected_scene = forefoot::value<uintptr_t>(slot);
     if (!expected_scene) return bsfn_resource::Busy;
@@ -324,7 +312,7 @@ extern "C" __declspec(dllexport) bool reframework_plugin_initialize(const REFram
     if (!p || !p->functions || !p->sdk) return false;
     host_copy = *p;
     host = &host_copy;
-    p->functions->log_info("[BSFNForefoot] 1.7.5 ready; native contract gate, explicit calls only, no hooks or frame callbacks");
+    p->functions->log_info("[BSFNForefoot] 1.7.6 ready; dynamic native contract, explicit calls only, no hooks or frame callbacks");
     return true;
 }
 extern "C" __declspec(dllexport) int bsfn_forefoot_probe(lua_State* state) {
@@ -334,6 +322,11 @@ extern "C" __declspec(dllexport) int bsfn_forefoot_probe(lua_State* state) {
 extern "C" __declspec(dllexport) int bsfn_forefoot_apply(lua_State* state) {
     Arguments args;
     return args.parse(state) ? args.finish(apply(args)) : 0;
+}
+// 与写入入口共用场景锁和完整结构校验；只读入口不调用任何姿态 setter。
+extern "C" __declspec(dllexport) int bsfn_forefoot_inspect(lua_State* state) {
+    Arguments args;
+    return args.parse(state) ? args.finish(apply(args, true)) : 0;
 }
 extern "C" __declspec(dllexport) int bsfn_forefoot_constraint(lua_State* state) {
     Arguments args;

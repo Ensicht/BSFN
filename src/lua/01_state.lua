@@ -4,7 +4,7 @@
 -- 保持稳定版默认值；运行时缓存不写入套装配置，索引由脚本自行维护。
 
 local MOD_NAME = "BoneSystemForNPC"
-local VERSION = "1.7.5"
+local VERSION = "1.7.6"
 local CONFIG_PATH = "BoneSystemForNPC/Config.json"
 local TARGETS_DIR = "BoneSystemForNPC/Targets"
 local TARGET_INDEX_PATH = "BoneSystemForNPC/TargetIndex.json"
