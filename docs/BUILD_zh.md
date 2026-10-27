@@ -35,12 +35,13 @@ python -B tools/build.py --compiler "C:/tools/llvm-mingw/bin/clang++.exe"
 | `out/release/build.json` | 本次构建产物的版本与摘要，不进入安装包 |
 | `dist/BSFN_v1.7.6/` | 完整发布文件夹，不再套一层压缩包 |
 | `dist/BSFN_v1.7.6/BSFN_v1.7.6.zip` | 可交给 Mod 管理器安装的 ZIP |
-| `dist/BSFN_v1.7.6/LICENSE`、`THIRD_PARTY_NOTICES.md`、`docs/licenses/` | 与安装 ZIP 一起分发的许可证及第三方声明 |
+| `dist/BSFN_v1.7.6/LICENSE`、`licenses/` | 与安装 ZIP 一起分发的许可证及第三方声明 |
 
 修改 `src/lua` 或 `src/bridge/bootstrap.lua` 后重新执行构建，不单独修改生成的 autorun 文件。
 `assets/natives` 是必需运行资源，会原样进入安装包。安装 ZIP 仅含 `reframework/`、必要的
-`natives/`、`modinfo.ini` 和 `README.md`。许可证放在发布文件夹中，与安装 ZIP 同级，
-不安装到游戏目录；各许可证的相对路径和内容保持不变。
+`natives/`、`modinfo.ini` 和 `README.md`。发布文件夹顶层只有安装 ZIP、`LICENSE` 和 `licenses/`，
+与 LifetimeGuard 的布局一致。第三方声明位于 `licenses/THIRD_PARTY_NOTICES.md`，其他第三方许可证
+同放在 `licenses/`；不安装到游戏目录。许可证正文保持不变；源码中的原位置不变，由构建脚本映射到发布位置。
 
 发布或转发时必须提供完整的 `dist/BSFN_v1.7.6/` 文件夹，不单独分发里面的安装 ZIP，
 也不把许可证作为另一个可选下载。构建不生成外层压缩包。两种源码包仍保留各自完整许可证。
