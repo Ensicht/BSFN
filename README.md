@@ -12,7 +12,7 @@
 
 ## 前置要求
 
-- **REFramework**，需要采用支持非 Pak 文件加载的较新版本。REF Nightly 01417 之后的版本修改了 PAK 加载机制，与目前荒野的大多数 Mod 打包方式存在冲突，建议固定使用 REF Nightly 01417，如无必要请勿使用更新的 REF 版本
+- **REFramework**，需要采用支持非 Pak 文件加载的较新版本。REF Nightly 01417 之后的版本修改了 PAK 加载机制，与目前荒野的大多数 Mod 打包方式存在冲突，建议固定使用 REF Nightly 01417，如无必要请勿使用更新的 REF 版本。
 - **BoneSystem**，感谢南风焓大佬的前置。链接：https://www.caimogu.cc/post/1937594.html
 - 你想用来替换 NPC 外观的原外观 Mod。
 - (可选) **差分管理器 4.3.0** 及以上，新版本已经兼容了本 Mod，感谢 MK 佬的支持。可以将差分管理器的差分设置同步给NPC，**强烈建议安装该 Mod 用于设置差分**。链接：https://www.caimogu.cc/post/2301016.html
